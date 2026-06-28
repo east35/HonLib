@@ -1,0 +1,11 @@
+{
+  "name": "honlib-tests",
+  "private": true,
+  "scripts": {
+    "test:scripted-epub": "bash scripts/test-scripted-epub.sh",
+    "test:scripted-epub:browser": "node tests/browser/scripted-epub.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.58.2"
+  }
+}

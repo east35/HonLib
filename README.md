@@ -242,3 +242,15 @@ under SIL Open Font License.
 Flask + vanilla-JS frontend using
 [foliate-js](https://github.com/johnfactotum/foliate-js) for rendering.
 Everything is baked into the Docker image at build time.
+
+### Scripted EPUB security test
+
+The browser regression test generates an EPUB containing a harmless script
+probe, opens it through HonLib in Chromium and WebKit, and verifies CSP blocks
+it. A CSP-stripped negative control must execute the same probe.
+
+```sh
+npm install
+npx playwright install chromium webkit
+npm run test:scripted-epub
+```

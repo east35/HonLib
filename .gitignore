@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .DS_Store
 .venv/
+node_modules/
 config/
 staging/
 data/
