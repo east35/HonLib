@@ -12,14 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="HonLib" />
   <link rel="apple-touch-icon" href="img/apple-touch-icon.png" />
   <link rel="icon" href="img/icon-192.png" />
-  <script>
-    (function () {
-      try {
-        var m = localStorage.getItem("ebook-library.theme");
-        if (m === "light" || m === "dark") document.documentElement.setAttribute("data-theme", m);
-      } catch (e) {}
-    })();
-  </script>
+  <script src="theme.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>

@@ -76,6 +76,39 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
 )
 
+CONTENT_SECURITY_POLICY = "; ".join((
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data: blob:",
+    "media-src 'self' data: blob:",
+    "connect-src 'self'",
+    "frame-src 'self' blob:",
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+))
+
+
+@app.after_request
+def _security_headers(response):
+    # Foliate renders untrusted EPUB HTML in script-enabled blob iframes.
+    # Restricting scripts to application-owned files prevents book-embedded
+    # JavaScript from executing while retaining Foliate's WebKit event support.
+    response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), geolocation=(), microphone=()",
+    )
+    return response
+
 
 LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ebook-dl — sign in</title><style>:root{--bg:#fff;--fg:#000}@media(prefers-color-scheme:dark){:root{--bg:#000;--fg:#fff}}*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}form{width:100%;max-width:320px;border:2px solid var(--fg);padding:24px;display:flex;flex-direction:column;gap:14px}h1{margin:0;font-size:22px}input{background:var(--bg);color:var(--fg);border:2px solid var(--fg);padding:12px 14px;font-size:16px}button{background:var(--fg);color:var(--bg);border:2px solid var(--fg);padding:12px 14px;font-size:15px;font-weight:700;cursor:pointer}.err{font-size:13px;font-weight:700}</style></head><body><div class="wrap"><form method="post" action="/login"><h1>ebook-dl</h1><p>Sign in to continue.</p>{% if show_user %}<input name="username" type="text" placeholder="Username" autocomplete="username" autofocus>{% endif %}<input name="password" type="password" placeholder="Password" autocomplete="current-password" {% if not show_user %}autofocus{% endif %}>{% if error %}<div class="err">{{ error }}</div>{% endif %}<button type="submit">Sign in</button></form></div></body></html>"""
 
