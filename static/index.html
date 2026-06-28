@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>HonLib</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#ffffff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="HonLib" />
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png" />
+  <link rel="icon" href="img/icon-192.png" />
+  <script>
+    (function () {
+      try {
+        var m = localStorage.getItem("ebook-library.theme");
+        if (m === "light" || m === "dark") document.documentElement.setAttribute("data-theme", m);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo" aria-hidden="true">本</span><h1>HonLib</h1></div>
+    <div class="topbar-actions">
+      <button id="refresh-library" class="btn icon-btn" title="Refresh library" aria-label="Refresh library">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M18.5 9A7 7 0 0 0 6.2 6.8L4 9" /><path d="M5.5 15a7 7 0 0 0 12.3 2.2L20 15" /></svg>
+      </button>
+      <button id="open-download" class="btn icon-btn" title="Add books" aria-label="Add books">
+        <svg id="add-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="square"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
+      <button id="open-menu" class="btn icon-btn" title="View &amp; sort" aria-label="View, sort and filter">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16" /><circle cx="9" cy="7" r="2.5" /><circle cx="15" cy="12" r="2.5" /><circle cx="8" cy="17" r="2.5" /></svg>
+      </button>
+      <a id="app-settings" class="btn icon-btn hidden" href="shell://settings" title="App settings" aria-label="App settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
+      </a>
+    </div>
+  </header>
+  <!--
+    The #app-settings link uses a shell:// URL handled by the optional Android
+    wrapper. It stays `hidden` for the web app; the wrapper injects its own
+    script to reveal it when running inside the WebView.
+  -->
+
+  <main>
+    <section class="lib-section hidden" id="flat-section"><div id="flat-results" class="library"></div></section>
+    <section class="lib-section hidden" id="inprogress-section"><div class="lib-head"><h2>In Progress</h2></div><div id="inprogress" class="library"></div></section>
+    <section class="lib-section" id="library-section"><div id="library" class="library"></div></section>
+    <section class="lib-section hidden" id="finished-section"><div class="lib-head"><h2>Complete</h2></div><div id="finished" class="library"></div></section>
+  </main>
+
+  <div id="drawer" class="drawer hidden">
+    <div class="drawer-scrim" data-close-drawer></div>
+    <aside class="drawer-panel" role="dialog" aria-label="View options">
+      <div class="drawer-head"><button class="btn ghost" data-close-drawer aria-label="Close">Close</button></div>
+      <div class="drawer-body">
+        <div class="drawer-field">
+          <label for="lib-search">Search</label>
+          <input id="lib-search" type="text" placeholder="Title, author or series" autocomplete="off" />
+        </div>
+        <div class="drawer-field">
+          <span class="drawer-label">Layout</span>
+          <button type="button" id="view-toggle" class="btn view-toggle" aria-label="Toggle layout between cover and table">Cover</button>
+        </div>
+        <div class="drawer-field">
+          <span class="drawer-label">Sort</span>
+          <div class="seg seg-wrap" id="sort-toggle" role="group" aria-label="Sort by">
+            <button type="button" data-sort="series">Series</button>
+            <button type="button" data-sort="title">Title</button>
+            <button type="button" data-sort="author">Author</button>
+            <button type="button" data-sort="genre">Genre</button>
+          </div>
+          <button type="button" id="sort-dir" class="btn ghost sort-dir" aria-label="Sort direction">A → Z</button>
+        </div>
+        <div class="drawer-field">
+          <label for="filter-author">Author</label>
+          <select id="filter-author"></select>
+        </div>
+        <div class="drawer-field">
+          <label for="filter-group">Series / folder</label>
+          <select id="filter-group"></select>
+        </div>
+        <button type="button" id="clear-filters" class="btn ghost">Clear search &amp; filters</button>
+        <div class="drawer-divider"></div>
+        <div class="drawer-field">
+          <span class="drawer-label">Theme</span>
+          <div class="seg theme-toggle" role="group" aria-label="Theme">
+            <button type="button" data-theme-set="system" title="Match system" aria-label="Match system theme">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="13" rx="1" /><path d="M8 21h8M12 17v4" /></svg>
+            </button>
+            <button type="button" data-theme-set="light" title="Light" aria-label="Light theme">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" /></svg>
+            </button>
+            <button type="button" data-theme-set="dark" title="Dark" aria-label="Dark theme">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
+            </button>
+          </div>
+        </div>
+        <div class="drawer-field">
+          <label for="lib-font">Reading font</label>
+          <select id="lib-font"></select>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="download-modal" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <div class="segmented" role="tablist" aria-label="Add or staging">
+          <button type="button" id="seg-add" class="active" role="tab" aria-selected="true" aria-controls="pane-add">Add</button>
+          <button type="button" id="seg-staging" role="tab" aria-selected="false" aria-controls="pane-staging" disabled>Staging</button>
+        </div>
+        <button class="btn ghost" data-close-modal>Close</button>
+      </div>
+      <div class="modal-body">
+        <div id="pane-add" role="tabpanel" aria-labelledby="seg-add">
+          <h4>IRC #ebooks search</h4>
+          <input id="irc-query" type="text" placeholder="Author or title" autocomplete="off" />
+          <div class="row"><button id="irc-search" class="btn primary">Search</button></div>
+          <pre id="irc-log" class="log hidden"></pre>
+          <div id="irc-results" class="results"></div>
+        </div>
+        <div id="pane-staging" class="hidden" role="tabpanel" aria-labelledby="seg-staging">
+          <div id="staging-results" class="results"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="reader" class="reader hidden" tabindex="0">
+    <div class="reader-sheet">
+      <div class="reader-controls">
+        <button id="reader-close" class="btn icon-btn" title="Back to library" aria-label="Back to library"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg></button>
+        <button id="reader-theme" class="btn icon-btn" title="Toggle reader theme" aria-label="Toggle reader theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg></button>
+        <button id="reader-fullscreen" class="btn icon-btn" title="Toggle fullscreen" aria-label="Toggle fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3" /></svg></button>
+        <button id="reader-columns" class="btn icon-btn" title="Column width" aria-label="Toggle column constraint"></button>
+        <button id="reader-progress-toggle" class="btn icon-btn" title="Reading progress" aria-label="Toggle reading progress"></button>
+        <div id="reader-size" class="size-toggle" role="group" aria-label="Text size">
+          <button type="button" data-step="-1" title="Smaller text" aria-label="Smaller text">&minus;</button>
+          <span class="size-label" aria-hidden="true">A</span>
+          <button type="button" data-step="1" title="Larger text" aria-label="Larger text">+</button>
+        </div>
+        <button id="reader-font" class="btn icon-btn" title="Reading font" aria-label="Reading font"></button>
+        <button id="toc-toggle" class="btn icon-btn" title="Contents" aria-label="Contents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button>
+        <button id="reader-collapse" class="btn icon-btn" title="Hide controls" aria-label="Hide controls"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg></button>
+      </div>
+      <div id="reader-fonts" class="reader-fontmenu hidden" role="menu" aria-label="Reading font"></div>
+    </div>
+    <div id="toc-view" class="toc-view hidden">
+      <div class="toc-view-head">
+        <button id="toc-back" class="btn icon-btn" title="Back to reading" aria-label="Back to reading"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6" /></svg></button>
+        <span>Contents</span>
+      </div>
+      <div id="toc-location" class="toc-location"></div>
+      <div id="toc-list" class="toc-list"></div>
+    </div>
+    <div id="epub-viewer"></div>
+    <div id="dict-popover" class="dict-popover hidden" role="dialog" aria-live="polite"></div>
+    <div id="reader-loading" class="reader-loading hidden" role="status" aria-live="polite">Loading…</div>
+    <div id="reader-progress" class="reader-progress hidden" aria-hidden="true"><div id="reader-progress-fill" class="reader-progress-fill"></div></div>
+    <div id="reader-hit-left" class="hit left"></div><div id="reader-hit-center" class="hit center"></div><div id="reader-hit-right" class="hit right"></div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

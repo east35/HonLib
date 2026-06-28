@@ -1,0 +1,24 @@
+services:
+  honlib:
+    build: .
+    container_name: honlib
+    ports:
+      - "8781:8765"
+    volumes:
+      # Override these in .env to point at existing library folders.
+      # Defaults are self-contained dirs created next to this compose file.
+      - ${EBOOK_LIB_BOOKS_DIR:-./data/books}:/data/books
+      - ${EBOOK_LIB_STAGING_DIR:-./data/staging}:/data/staging
+      - ./config:/data/config
+    environment:
+      EBOOK_LIB_NO_BROWSER: "1"
+      EBOOK_LIB_FOLDER: /data/books
+      EBOOK_LIB_STAGING: /data/staging
+      EBOOK_LIB_CONFIG_DIR: /data/config
+      EBOOK_LIB_CONTAINER: "1"
+      EBOOK_LIB_PASSWORD: ${EBOOK_LIB_PASSWORD:-}
+      EBOOK_LIB_USERNAME: ${EBOOK_LIB_USERNAME:-}
+      EBOOK_LIB_COOKIE_SECURE: ${EBOOK_LIB_COOKIE_SECURE:-}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+    restart: unless-stopped
