@@ -3,6 +3,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 _config_dir = tempfile.TemporaryDirectory()
@@ -38,6 +39,21 @@ class SecurityHeaderTests(unittest.TestCase):
 
         self.assertIsNone(re.search(r"<script(?![^>]*\bsrc=)[^>]*>", html, re.I))
         self.assertIn('<script src="theme.js"></script>', html)
+
+
+class OptionalPluginTests(unittest.TestCase):
+    def test_empty_submodule_directory_is_not_treated_as_plugin(self):
+        self.assertFalse(app._valid_irc_plugin(SimpleNamespace()))
+
+    def test_complete_client_contract_is_accepted(self):
+        client = SimpleNamespace(
+            status=lambda: {},
+            search=lambda *args, **kwargs: [],
+            download=lambda *args, **kwargs: None,
+            start_background=lambda: None,
+        )
+
+        self.assertTrue(app._valid_irc_plugin(SimpleNamespace(client=client)))
 
 
 if __name__ == "__main__":

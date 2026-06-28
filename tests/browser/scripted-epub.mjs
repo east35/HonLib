@@ -17,21 +17,35 @@ async function openProbe(page) {
       }
     });
   });
-  await page.locator('.series-card[title="HonLib Scripted EPUB Security Test"]').click();
+  await page.locator('#library .series-card[title="HonLib Scripted EPUB Security Test"]').click();
   await page.waitForFunction(() => {
     const view = document.querySelector("foliate-view");
     const doc = view?.renderer?.getContents?.()[0]?.doc;
     return !!doc?.querySelector("#honlib-csp-probe");
   });
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
     const view = document.querySelector("foliate-view");
     const doc = view.renderer.getContents()[0].doc;
+    await doc.fonts.ready;
+    await doc.fonts.load('16px "HonLibCspProbe"');
+    const assetProbe = doc.querySelector("#honlib-csp-assets");
+    const image = doc.querySelector("#honlib-csp-image");
+    const styles = doc.defaultView.getComputedStyle(assetProbe);
     return {
       probePresent: !!doc.querySelector("#honlib-csp-probe"),
       status: doc.querySelector("#honlib-csp-status")?.textContent,
       messageReceived: window.__honlibCspProbe,
+      cssColor: styles.color,
+      fontLoaded: doc.fonts.check('16px "HonLibCspProbe"'),
+      imageLoaded: image.complete && image.naturalWidth === 32 && image.naturalHeight === 24,
     };
   });
+}
+
+function assertAssets(name, result) {
+  assert.equal(result.cssColor, "rgb(12, 34, 56)", `${name}: embedded CSS was blocked`);
+  assert.equal(result.fontLoaded, true, `${name}: embedded font was blocked`);
+  assert.equal(result.imageLoaded, true, `${name}: embedded image was blocked`);
 }
 
 async function runEngine(name, engine) {
@@ -44,6 +58,7 @@ async function runEngine(name, engine) {
     assert.equal(protectedResult.probePresent, true, `${name}: probe was removed before CSP could test it`);
     assert.equal(protectedResult.status, "Script did not run", `${name}: EPUB script changed the document`);
     assert.equal(protectedResult.messageReceived, false, `${name}: EPUB script messaged the parent`);
+    assertAssets(name, protectedResult);
     await protectedContext.close();
 
     // Negative control: strip CSP only inside this isolated browser context.
@@ -60,6 +75,7 @@ async function runEngine(name, engine) {
     assert.equal(controlResult.probePresent, true, `${name}: control probe missing`);
     assert.equal(controlResult.status, "SCRIPT EXECUTED", `${name}: negative control did not execute`);
     assert.equal(controlResult.messageReceived, true, `${name}: negative control did not reach parent`);
+    assertAssets(`${name} negative control`, controlResult);
     await controlContext.close();
     console.log(`${name}: CSP blocked the scripted EPUB; negative control executed`);
   } finally {

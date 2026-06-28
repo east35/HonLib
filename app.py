@@ -19,12 +19,24 @@ import library
 import progress
 from acquisition.sites import find_site
 
+IRC_CLIENT_METHODS = ("status", "search", "download", "start_background")
+
+
+def _valid_irc_plugin(module):
+    client = getattr(module, "client", None)
+    return client is not None and all(
+        callable(getattr(client, method, None))
+        for method in IRC_CLIENT_METHODS
+    )
+
+
 try:
-    from acquisition import irc  # optional submodule at acquisition/irc/
-    HAS_IRC = True
+    from acquisition import irc as _irc  # optional submodule at acquisition/irc/
 except ImportError:
-    irc = None
-    HAS_IRC = False
+    _irc = None
+
+HAS_IRC = _valid_irc_plugin(_irc)
+irc = _irc if HAS_IRC else None
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
