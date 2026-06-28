@@ -736,16 +736,29 @@ def book_cover(book_id):
     return resp
 
 
-if __name__ == "__main__":
+_runtime_lock = threading.Lock()
+_runtime_started = False
+
+
+def _warm_library():
+    folder = current_library_folder()
+    library.scan_library(folder, use_cache=True)
+    library.warm_cover_cache(folder, CONFIG_DIR / "cover-cache")
+
+
+def initialize_runtime():
+    global _runtime_started
+    with _runtime_lock:
+        if _runtime_started:
+            return
+        _runtime_started = True
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     Path(current_staging_folder()).mkdir(parents=True, exist_ok=True)
     if HAS_IRC:
         irc.client.start_background()
-    def _warm_library():
-        folder = current_library_folder()
-        library.scan_library(folder, use_cache=True)
-        library.warm_cover_cache(folder, CONFIG_DIR / "cover-cache")
     threading.Thread(target=_warm_library, daemon=True).start()
-    if os.environ.get("EBOOK_LIB_NO_BROWSER") != "1":
-        pass
+
+
+if __name__ == "__main__":
+    initialize_runtime()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8765")), threaded=True)

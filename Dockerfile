@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # The optional IRC acquisition plugin is a submodule at acquisition/irc and
 # currently uses only the Python standard library.
 
-COPY app.py library.py progress.py ./
+COPY app.py library.py progress.py wsgi.py ./
 COPY acquisition ./acquisition
 COPY static ./static
 
@@ -22,4 +22,4 @@ RUN mkdir -p /data/books /data/config /data/staging
 
 EXPOSE 8765
 
-CMD ["python", "app.py"]
+CMD ["gunicorn", "--bind=0.0.0.0:8765", "--workers=1", "--threads=8", "--timeout=120", "--access-logfile=-", "wsgi:app"]

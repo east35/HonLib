@@ -247,7 +247,7 @@ under SIL Open Font License.
 
 ## Tech
 
-Flask + vanilla-JS frontend using
+Flask behind a single Gunicorn worker with threads, with a vanilla-JS frontend using
 [foliate-js](https://github.com/johnfactotum/foliate-js) for rendering.
 Foliate is pinned to an exact commit rather than following its moving `main`
 branch. Everything is baked into the Docker image at build time.
