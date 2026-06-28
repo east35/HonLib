@@ -15,6 +15,9 @@ COPY app.py library.py progress.py ./
 COPY acquisition ./acquisition
 COPY static ./static
 
+RUN test -f /app/static/vendor/foliate-js/view.js || \
+    (echo "Foliate submodule missing; run: git submodule update --init static/vendor/foliate-js" >&2; exit 1)
+
 RUN mkdir -p /data/books /data/config /data/staging
 
 EXPOSE 8765

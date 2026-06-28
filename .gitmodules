@@ -4,3 +4,6 @@
 [submodule "acquisition/irc"]
 	path = acquisition/irc
 	url = https://github.com/east35/HonLib-IRC.git
+[submodule "static/vendor/foliate-js"]
+	path = static/vendor/foliate-js
+	url = https://github.com/johnfactotum/foliate-js.git

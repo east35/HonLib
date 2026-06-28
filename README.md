@@ -90,7 +90,7 @@ reader behavior consistent.
 ## Quick start
 
 ```sh
-git clone <this-repo> HonLib
+git clone --recurse-submodules <this-repo> HonLib
 cd HonLib
 docker compose up -d --build
 ```
@@ -173,6 +173,14 @@ reverse proxy with TLS).
 HonLib ships intentionally light. Optional components are tracked as git
 submodules so the core web app remains usable without checking them out.
 
+The core renderer, [foliate-js](https://github.com/johnfactotum/foliate-js),
+is also pinned as a submodule at `static/vendor/foliate-js`. Unlike the optional
+components below, it must be initialized before building:
+
+```sh
+git submodule update --init static/vendor/foliate-js
+```
+
 ### Acquisition plugin (`acquisition/irc/`)
 
 If a Python package exists at `acquisition/irc/` exposing a `client` object,
@@ -218,7 +226,7 @@ it.
 
 ```sh
 git pull
-git submodule update --remote   # if you've added any plugins
+git submodule update --init --recursive
 docker compose up -d --build
 ```
 
@@ -241,7 +249,8 @@ under SIL Open Font License.
 
 Flask + vanilla-JS frontend using
 [foliate-js](https://github.com/johnfactotum/foliate-js) for rendering.
-Everything is baked into the Docker image at build time.
+Foliate is pinned to an exact commit rather than following its moving `main`
+branch. Everything is baked into the Docker image at build time.
 
 ### Scripted EPUB security test
 
