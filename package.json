@@ -6,6 +6,6 @@
     "test:scripted-epub:browser": "node tests/browser/scripted-epub.mjs"
   },
   "devDependencies": {
-    "playwright": "1.58.2"
+    "playwright": "1.61.1"
   }
 }
