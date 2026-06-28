@@ -1,3 +1,5 @@
+![HonLib logo](static/img/honlib-logo.png)
+
 # HonLib
 
 A self-hosted ebook library and reader you run with Docker. Browse your epub
