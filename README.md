@@ -168,8 +168,8 @@ reverse proxy with TLS).
 
 ## Optional modules
 
-HonLib ships intentionally light. Two extension points are wired in but empty
-by default — add them as git submodules if you want them.
+HonLib ships intentionally light. Optional components are tracked as git
+submodules so the core web app remains usable without checking them out.
 
 ### Acquisition plugin (`acquisition/irc/`)
 
@@ -188,14 +188,14 @@ class _Client:
 client = _Client()
 ```
 
-To install your own plugin:
+The official plugin is maintained separately and pinned here as a submodule:
 
 ```sh
-git submodule add <your-plugin-repo> acquisition/irc
-pip install -r requirements-irc.txt    # if your plugin has extra deps
-# then uncomment the matching line in Dockerfile and rebuild
+git submodule update --init acquisition/irc
 docker compose up -d --build
 ```
+
+The plugin currently has no additional Python dependencies.
 
 ### Android wrapper (`android/`)
 

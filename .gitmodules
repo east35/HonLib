@@ -1,3 +1,6 @@
 [submodule "android"]
 	path = android
 	url = https://github.com/east35/ebook-manga-local.git
+[submodule "acquisition/irc"]
+	path = acquisition/irc
+	url = https://github.com/east35/HonLib-IRC.git

@@ -11,8 +11,3 @@ ebook-dl-share.zip
 # Synology metadata + local agent settings
 @eaDir/
 .claude/
-
-# Optional acquisition plugin — added by users via `git submodule add`.
-# Ignored so clones without the plugin stay clean and so a local copy can't
-# accidentally be committed into HonLib instead of as a submodule.
-acquisition/irc/

@@ -8,10 +8,8 @@ WORKDIR /app
 COPY requirements*.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Optional: enable the IRC acquisition plugin by adding it as a git submodule
-# at acquisition/irc/ before building, then uncomment the next line so its
-# extra deps (pydle, etc.) are installed.
-# RUN pip install --no-cache-dir -r requirements-irc.txt
+# The optional IRC acquisition plugin is a submodule at acquisition/irc and
+# currently uses only the Python standard library.
 
 COPY app.py library.py progress.py ./
 COPY acquisition ./acquisition
