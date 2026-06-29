@@ -22,9 +22,9 @@ HonLib doesn't sync anything itself — that's not its job. Point it at a local
 folder and it reads from disk; keeping that folder up to date is whatever
 syncing tool you already use (Syncthing, Dropbox, a NAS share, whatever).
 HonLib just notices when the files are there. The companion
-[Android reader](https://github.com/east35/ebook-manga-local) takes the same
-posture on the device side: read from local storage if the file is present,
-fall back to the server otherwise.
+[Android reader](https://github.com/east35/lib-sdk) takes the same posture on
+the device side: read from local storage if the file is present, fall back to
+the server otherwise.
 
 ### Typography, not settings
 
@@ -210,8 +210,8 @@ The plugin currently has no additional Python dependencies.
 ### Android wrapper (`android/`)
 
 A native Android reader is tracked as a submodule at `android/`, sourced from
-[east35/ebook-manga-local](https://github.com/east35/ebook-manga-local). Pull
-it with the rest of the project:
+[east35/lib-sdk](https://github.com/east35/lib-sdk). Pull it with the rest of
+the project:
 
 ```sh
 git clone --recurse-submodules <this-repo> HonLib
