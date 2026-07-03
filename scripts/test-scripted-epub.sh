@@ -5,6 +5,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 CONTAINER="honlib-csp-test-$$"
 PORT="${HONLIB_TEST_PORT:-8877}"
+BIND_HOST="${HONLIB_TEST_BIND_HOST:-127.0.0.1}"
+TEST_HOST="${HONLIB_TEST_HOST:-127.0.0.1}"
+BASE_URL="${HONLIB_BASE_URL:-http://${TEST_HOST}:${PORT}}"
 
 cleanup() {
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
@@ -18,7 +21,7 @@ python3 "$ROOT/tests/fixtures/make_scripted_epub.py" \
 
 docker build -t honlib-csp-test "$ROOT" >/dev/null
 docker run -d --name "$CONTAINER" \
-  -p "127.0.0.1:${PORT}:8765" \
+  -p "${BIND_HOST}:${PORT}:8765" \
   -e EBOOK_LIB_CONTAINER=1 \
   -e EBOOK_LIB_CONFIG_DIR=/data/config \
   -e EBOOK_LIB_FOLDER=/data/books \
@@ -29,8 +32,8 @@ docker run -d --name "$CONTAINER" \
   honlib-csp-test >/dev/null
 
 for _ in {1..30}; do
-  if curl --fail --silent "http://127.0.0.1:${PORT}/api/features" >/dev/null; then
-    HONLIB_BASE_URL="http://127.0.0.1:${PORT}" \
+  if curl --fail --silent "${BASE_URL}/api/features" >/dev/null; then
+    HONLIB_BASE_URL="${BASE_URL}" \
       node "$ROOT/tests/browser/scripted-epub.mjs"
     exit
   fi

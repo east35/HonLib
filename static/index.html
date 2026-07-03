@@ -135,14 +135,24 @@
         <button id="reader-progress-toggle" class="btn icon-btn" title="Reading progress" aria-label="Toggle reading progress"></button>
         <div id="reader-size" class="size-toggle" role="group" aria-label="Text size">
           <button type="button" data-step="-1" title="Smaller text" aria-label="Smaller text">&minus;</button>
-          <span class="size-label" aria-hidden="true">A</span>
+          <button type="button" class="size-label size-font-trigger" data-role="font-menu" title="Reading font" aria-label="Reading font">A</button>
           <button type="button" data-step="1" title="Larger text" aria-label="Larger text">+</button>
         </div>
-        <button id="reader-font" class="btn icon-btn" title="Reading font" aria-label="Reading font"></button>
+        <button id="reader-refresh" class="btn icon-btn" title="Page refresh: off" aria-label="Page refresh">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M18.5 9A7 7 0 0 0 6.2 6.8L4 9" /><path d="M5.5 15a7 7 0 0 0 12.3 2.2L20 15" /></svg>
+        </button>
         <button id="toc-toggle" class="btn icon-btn" title="Contents" aria-label="Contents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button>
         <button id="reader-collapse" class="btn icon-btn" title="Hide controls" aria-label="Hide controls"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg></button>
       </div>
       <div id="reader-fonts" class="reader-fontmenu hidden" role="menu" aria-label="Reading font"></div>
+      <div id="reader-refresh-panel" class="reader-popmenu reader-refresh-panel hidden" role="dialog" aria-label="Page refresh">
+        <div class="reader-refresh-head">
+          <span>Page refresh</span>
+          <span id="reader-refresh-value" class="reader-refresh-value">Off</span>
+        </div>
+        <input id="reader-refresh-slider" class="reader-refresh-slider" type="range" min="0" max="25" step="1" value="0" aria-label="Refresh every N pages" />
+        <div class="reader-refresh-copy">Set how many forward page turns happen before a quick screen flash. 0 disables it.</div>
+      </div>
     </div>
     <div id="toc-view" class="toc-view hidden">
       <div class="toc-view-head">
@@ -153,6 +163,7 @@
       <div id="toc-list" class="toc-list"></div>
     </div>
     <div id="epub-viewer"></div>
+    <div id="reader-flash" class="reader-flash hidden" aria-hidden="true"></div>
     <div id="dict-popover" class="dict-popover hidden" role="dialog" aria-live="polite"></div>
     <div id="reader-loading" class="reader-loading hidden" role="status" aria-live="polite">Loading…</div>
     <div id="reader-progress" class="reader-progress hidden" aria-hidden="true"><div id="reader-progress-fill" class="reader-progress-fill"></div></div>
