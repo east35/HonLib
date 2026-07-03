@@ -10,7 +10,7 @@ const els = {
   library: $("#library"), librarySection: $("#library-section"), inprogress: $("#inprogress"), inprogressSection: $("#inprogress-section"), finished: $("#finished"), finishedSection: $("#finished-section"),
   flatSection: $("#flat-section"), flatResults: $("#flat-results"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
-  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressFill: $("#reader-progress-fill"), sizeToggle: $("#reader-size"), readerFont: $("#reader-font"), readerFonts: $("#reader-fonts"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"),
+  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressFill: $("#reader-progress-fill"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"),
 };
 
 let currentJob = null;
@@ -39,11 +39,14 @@ let currentLocation = { fraction: 0, tocHref: null };
 // relocations fired before the book reaches its saved position can't overwrite
 // real progress with a near-zero fraction.
 let readerReady = false;
+let lastRelocateMarker = null;
+let pageTurnsSinceRefresh = 0;
+let refreshFlashTimer = null;
 // The server's `last_opened` token this reader session is synced to. Sent as
 // `base` on each save so the server can reject writes from a session that has
 // fallen behind another device, and refreshed from every accepted response.
 let sessionBase = null;
-let readerSettings = JSON.parse(localStorage.getItem("ebook-library.reader") || '{"theme":"light","fontScale":1,"columns":true,"progress":true}');
+let readerSettings = JSON.parse(localStorage.getItem("ebook-library.reader") || '{"theme":"light","fontScale":1,"columns":true,"progress":true,"refreshEvery":0}');
 
 // ---- Fonts -------------------------------------------------------------
 // Curated reading fonts, served from /vendor/fonts. `stack` is the CSS
@@ -81,8 +84,6 @@ if (!FONT_BY_ID[readerSettings.font]) readerSettings.font = "literata";
 // The reading font applies only to book content in the reader (not the app
 // chrome). The face is injected into the foliate iframe by applyReaderTheme.
 function currentReaderFont() { return fontById(readerSettings.font, "literata"); }
-// Reader font glyph: stacked "Aa" peaks.
-const FONT_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 8 6l5 12M4.6 14h6.8" /><path d="M15 18l3-8 3 8M16 15h4" /></svg>';
 
 // Typography is automatic: a base font size is derived from a target measure
 // (characters per line) anchored on the 65-cpl ideal, then the reader's own
@@ -128,6 +129,7 @@ const PROGRESS_ON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentCol
 const PROGRESS_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="10" width="18" height="4" rx="2" /></svg>';
 if (!(readerSettings.fontScale > 0)) readerSettings.fontScale = 1;
 readerSettings.fontScale = Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, readerSettings.fontScale));
+readerSettings.refreshEvery = Math.max(0, Math.min(25, Math.round(Number(readerSettings.refreshEvery) || 0)));
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -620,6 +622,8 @@ function awaitViewerSize(timeout = 2000) {
 }
 async function openReader(book) {
   readerReady = false;
+  lastRelocateMarker = null;
+  pageTurnsSinceRefresh = 0;
   els.reader.classList.remove("hidden"); document.body.classList.add("reader-open");
   // Re-pull progress from the server before restoring position. The in-memory
   // `progress` map can be stale if this tab has been open while another device
@@ -646,6 +650,7 @@ async function openReader(book) {
     els.readerLoading.classList.add("hidden");
     closeDictPopover();
     const loc = e.detail || {};
+    noteReaderRelocate(loc);
     currentLocation = { fraction: loc.fraction || 0, tocHref: loc.tocItem?.href || null };
     updateProgressUI();
     if (!els.tocView.classList.contains("hidden")) updateTocView();
@@ -725,7 +730,7 @@ function updateTocView() {
   return markCurrentTocItem();
 }
 function openTocView() {
-  closeReaderFontMenu();
+  closeReaderPopups();
   closeDictPopover();
   const current = updateTocView();
   els.tocView.classList.remove("hidden");
@@ -733,7 +738,7 @@ function openTocView() {
   else els.tocList.scrollTop = 0;
 }
 function closeTocView() { els.tocView.classList.add("hidden"); }
-function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; closeTocView(); closeReaderFontMenu(); closeDictPopover(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
+function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeDictPopover(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
 function saveReaderSettings() { localStorage.setItem("ebook-library.reader", JSON.stringify(readerSettings)); }
 // Measure a font's average glyph advance once (it never changes for a face), so
 // we can solve for the font size that yields a given characters-per-line measure.
@@ -821,6 +826,66 @@ function updateProgressButton() {
   els.readerProgressToggle.innerHTML = progressEnabled() ? PROGRESS_ON_SVG : PROGRESS_OFF_SVG;
   els.readerProgressToggle.title = progressEnabled() ? "Reading progress: on" : "Reading progress: off";
 }
+function refreshEveryPages() { return Math.max(0, Math.min(25, Math.round(Number(readerSettings.refreshEvery) || 0))); }
+function formatRefreshEvery(value) { return value > 0 ? `After ${value} ${value === 1 ? "Page" : "Pages"}` : "Off"; }
+function updateRefreshPanelUI() {
+  const value = refreshEveryPages();
+  if (els.readerRefreshSlider) els.readerRefreshSlider.value = String(value);
+  if (els.readerRefreshValue) els.readerRefreshValue.textContent = formatRefreshEvery(value);
+}
+function updateRefreshButton() {
+  if (!els.readerRefresh) return;
+  const value = refreshEveryPages();
+  els.readerRefresh.title = value > 0 ? `Page refresh: after ${value} ${value === 1 ? "page" : "pages"}` : "Page refresh: off";
+}
+function closeReaderRefreshMenu() { els.readerRefreshPanel.classList.add("hidden"); }
+function toggleReaderRefreshMenu() {
+  if (els.readerRefreshPanel.classList.contains("hidden")) {
+    closeReaderFontMenu();
+    updateRefreshPanelUI();
+    els.readerRefreshPanel.classList.remove("hidden");
+  } else closeReaderRefreshMenu();
+}
+function closeReaderPopups() {
+  closeReaderFontMenu();
+  closeReaderRefreshMenu();
+}
+function triggerReaderRefreshFlash() {
+  if (!els.readerFlash) return;
+  clearTimeout(refreshFlashTimer);
+  els.readerFlash.classList.remove("hidden", "active");
+  void els.readerFlash.offsetWidth;
+  els.readerFlash.classList.add("active");
+  refreshFlashTimer = setTimeout(() => {
+    els.readerFlash.classList.remove("active");
+    els.readerFlash.classList.add("hidden");
+  }, 220);
+}
+function readerRelocateMarker(loc) {
+  const page = readerView?.renderer?.page || 0;
+  const section = loc.section?.current ?? loc.section?.index ?? loc.tocItem?.href ?? "";
+  return `${section}|${page}|${loc.cfi || ""}`;
+}
+function noteReaderRelocate(loc) {
+  const marker = readerRelocateMarker(loc);
+  const prevFraction = currentLocation.fraction || 0;
+  const nextFraction = Number(loc.fraction) || 0;
+  const movedForward = nextFraction > prevFraction + 1e-6;
+  if (!lastRelocateMarker) {
+    lastRelocateMarker = marker;
+    return;
+  }
+  if (marker === lastRelocateMarker) return;
+  lastRelocateMarker = marker;
+  if (!readerReady || !movedForward) return;
+  const every = refreshEveryPages();
+  if (!every) return;
+  pageTurnsSinceRefresh += 1;
+  if (pageTurnsSinceRefresh >= every) {
+    pageTurnsSinceRefresh = 0;
+    triggerReaderRefreshFlash();
+  }
+}
 // Size the column. Constrained: cap it at a max width. Unconstrained: let it
 // fill the view with 2rem of device padding on each side. `gap` is a % of the
 // view, so derive the % that yields ~2rem; `max-inline-size` is set last as it
@@ -845,6 +910,8 @@ function applyReaderTheme() {
   updateSizeButtons();
   updateColumnsButton();
   updateProgressButton();
+  updateRefreshButton();
+  updateRefreshPanelUI();
   updateProgressUI();
   const dark = readerSettings.theme === "dark";
   els.readerTheme.innerHTML = dark ? MOON_SVG : SUN_SVG;
@@ -883,11 +950,11 @@ function stepFontScale(dir) {
 // separate, explicit control so the two can never get out of sync.
 function toggleReaderChrome() {
   els.reader.classList.toggle("chrome-hidden");
-  if (els.reader.classList.contains("chrome-hidden")) closeReaderFontMenu();
+  if (els.reader.classList.contains("chrome-hidden")) closeReaderPopups();
 }
 function hideReaderChrome() {
   els.reader.classList.add("chrome-hidden");
-  closeReaderFontMenu();
+  closeReaderPopups();
 }
 function toggleFullscreen() {
   if (!document.fullscreenEnabled) return;
@@ -1015,6 +1082,8 @@ function closeDictPopover() { dictReqId++; clearTimeout(dictDebounce); els.dictP
 // Taps inside the book are handled by the per-document selection listener.
 document.addEventListener("pointerdown", (e) => {
   if (!els.dictPopover.classList.contains("hidden") && !els.dictPopover.contains(e.target)) closeDictPopover();
+  if (!els.readerFonts.classList.contains("hidden") && !els.readerFonts.contains(e.target) && !e.target.closest('[data-role="font-menu"]')) closeReaderFontMenu();
+  if (!els.readerRefreshPanel.classList.contains("hidden") && !els.readerRefreshPanel.contains(e.target) && !e.target.closest("#reader-refresh")) closeReaderRefreshMenu();
 });
 els.readerClose.addEventListener("click", closeReader);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshOpenReaderProgress(); });
@@ -1027,7 +1096,12 @@ els.readerTheme.addEventListener("click", () => { readerSettings.theme = readerS
 els.readerFullscreen.addEventListener("click", toggleFullscreen);
 els.readerColumns.addEventListener("click", () => { readerSettings.columns = !columnsConstrained(); saveReaderSettings(); applyReaderTheme(); });
 els.readerProgressToggle.addEventListener("click", () => { readerSettings.progress = !progressEnabled(); saveReaderSettings(); updateProgressButton(); updateProgressUI(); });
-els.sizeToggle.addEventListener("click", (e) => { const b = e.target.closest("button[data-step]"); if (b) stepFontScale(Number(b.dataset.step)); });
+els.sizeToggle.addEventListener("click", (e) => {
+  const fontButton = e.target.closest('button[data-role="font-menu"]');
+  if (fontButton) return toggleReaderFontMenu();
+  const b = e.target.closest("button[data-step]");
+  if (b) stepFontScale(Number(b.dataset.step));
+});
 // Reader font picker: a small popup list above the control sheet. Each option
 // previews itself in its own face; the current font is highlighted.
 function renderReaderFontMenu() {
@@ -1037,7 +1111,7 @@ function renderReaderFontMenu() {
 }
 function closeReaderFontMenu() { els.readerFonts.classList.add("hidden"); }
 function toggleReaderFontMenu() {
-  if (els.readerFonts.classList.contains("hidden")) { renderReaderFontMenu(); els.readerFonts.classList.remove("hidden"); }
+  if (els.readerFonts.classList.contains("hidden")) { closeReaderRefreshMenu(); renderReaderFontMenu(); els.readerFonts.classList.remove("hidden"); }
   else closeReaderFontMenu();
 }
 function setReaderFont(id) {
@@ -1051,8 +1125,15 @@ function setReaderFont(id) {
   ensureFontAdvance(currentReaderFont()).then(applyReaderTheme);
   applyReaderTheme();
 }
-els.readerFont.addEventListener("click", toggleReaderFontMenu);
 els.readerFonts.addEventListener("click", (e) => { const b = e.target.closest("button[data-font]"); if (b) setReaderFont(b.dataset.font); });
+els.readerRefresh.addEventListener("click", toggleReaderRefreshMenu);
+els.readerRefreshSlider.addEventListener("input", () => {
+  readerSettings.refreshEvery = Math.max(0, Math.min(25, Math.round(Number(els.readerRefreshSlider.value) || 0)));
+  pageTurnsSinceRefresh = 0;
+  saveReaderSettings();
+  updateRefreshButton();
+  updateRefreshPanelUI();
+});
 if (!document.fullscreenEnabled) els.readerFullscreen.classList.add("hidden");
 document.addEventListener("fullscreenchange", updateFullscreenButton);
 updateFullscreenButton();
@@ -1171,7 +1252,6 @@ async function loadIrcStatus() {
 }
 setTheme(localStorage.getItem("ebook-library.theme") || "system");
 populateFontSelect();
-els.readerFont.innerHTML = FONT_ICON_SVG;
 updateLibControls();
 applyReaderTheme();
 loadIrcStatus().then(loadStaging);
