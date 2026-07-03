@@ -853,13 +853,22 @@ function closeReaderPopups() {
 function triggerReaderRefreshFlash() {
   if (!els.readerFlash) return;
   clearTimeout(refreshFlashTimer);
-  els.readerFlash.classList.remove("hidden", "active");
-  void els.readerFlash.offsetWidth;
-  els.readerFlash.classList.add("active");
+  const flash = els.readerFlash;
+  // E-ink displays only clear ghosting when the controller runs a full
+  // waveform refresh. To force that from the browser we paint solid full-
+  // screen black, hold it long enough for the panel to settle, then paint
+  // solid white and hold again. A fast fade doesn't trigger a global update.
+  flash.classList.remove("hidden", "phase-black", "phase-white");
+  void flash.offsetWidth;
+  flash.classList.add("phase-black");
   refreshFlashTimer = setTimeout(() => {
-    els.readerFlash.classList.remove("active");
-    els.readerFlash.classList.add("hidden");
-  }, 220);
+    flash.classList.remove("phase-black");
+    flash.classList.add("phase-white");
+    refreshFlashTimer = setTimeout(() => {
+      flash.classList.remove("phase-white");
+      flash.classList.add("hidden");
+    }, 400);
+  }, 400);
 }
 function readerRelocateMarker(loc) {
   const page = readerView?.renderer?.page || 0;
