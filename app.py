@@ -17,6 +17,7 @@ from flask import Flask, abort, jsonify, redirect, render_template_string, reque
 
 import library
 import progress
+import web_bundle
 from acquisition.sites import find_site
 
 IRC_CLIENT_METHODS = ("status", "search", "download", "start_background")
@@ -87,6 +88,7 @@ app.config.update(
     SESSION_COOKIE_SECURE=COOKIE_SECURE,
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
 )
+web_bundle.register_routes(app)
 
 CONTENT_SECURITY_POLICY = "; ".join((
     "default-src 'self'",
