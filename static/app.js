@@ -942,7 +942,10 @@ function applyReaderTheme() {
     h4{font-size:1.1rem!important}h5,h6{font-size:1rem!important}
     p,li,blockquote,dd{line-height:${READER_LINE_HEIGHT}!important}
     p,li,blockquote,dd{text-align:justify!important;-webkit-hyphens:auto;hyphens:auto}
-    p{margin:0 0 1em!important}
+    /* Only normalize vertical spacing. Zeroing the horizontal margins strips the
+       anchor from hanging indents (margin-left + negative text-indent), pulling
+       the first line outside the column, where pagination clips it. */
+    p{margin-top:0!important;margin-bottom:1em!important}
     a{color:${dark ? "#9ecbff" : "#0645ad"}}
   `);
   requestAnimationFrame(() => readerView?.renderer?.render?.());

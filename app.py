@@ -91,7 +91,7 @@ app.config.update(
 CONTENT_SECURITY_POLICY = "; ".join((
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' blob:",
     "img-src 'self' data: blob:",
     "font-src 'self' data: blob:",
     "media-src 'self' data: blob:",
