@@ -3,4 +3,4 @@ gunicorn==26.0.0
 ebooklib==0.18
 beautifulsoup4==4.12.3
 requests==2.33.0
-Pillow==12.2.0
+Pillow==12.3.0
