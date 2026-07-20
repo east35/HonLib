@@ -21,10 +21,14 @@ def load_progress():
             if isinstance(data, dict):
                 books = data.get("books")
                 if isinstance(books, dict):
-                    return {"books": books}
+                    bookmarks = data.get("bookmarks")
+                    return {
+                        "books": books,
+                        "bookmarks": bookmarks if isinstance(bookmarks, dict) else {},
+                    }
         except Exception:
             pass
-    return {"books": {}}
+    return {"books": {}, "bookmarks": {}}
 
 
 def save_progress(data):
@@ -70,3 +74,35 @@ def reset_book_progress(book_id):
             del data["books"][book_id]
             save_progress(data)
         return existed
+
+
+def update_bookmark(book_id, *, cfi, add, percent=None, label=None):
+    """Atomically add or remove a CFI bookmark and return the book's list."""
+    cfi = str(cfi or "").strip()
+    if not cfi:
+        raise ValueError("cfi required")
+    with _lock:
+        data = load_progress()
+        by_book = data.setdefault("bookmarks", {})
+        items = by_book.setdefault(book_id, [])
+        if not isinstance(items, list):
+            items = by_book[book_id] = []
+
+        # A CFI identifies one exact reading position, so repeated requests are
+        # idempotent and cannot create duplicate bookmarks.
+        items[:] = [item for item in items if not isinstance(item, dict) or item.get("cfi") != cfi]
+        if add:
+            try:
+                fraction = max(0.0, min(1.0, float(percent)))
+            except (TypeError, ValueError):
+                fraction = 0.0
+            items.append({
+                "cfi": cfi,
+                "percent": fraction,
+                "label": str(label or "Bookmark").strip()[:200] or "Bookmark",
+                "created_at": _now_iso(),
+            })
+        if not items:
+            by_book.pop(book_id, None)
+        save_progress(data)
+        return list(by_book.get(book_id, []))

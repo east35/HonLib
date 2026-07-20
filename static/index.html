@@ -141,7 +141,7 @@
         <button id="reader-refresh" class="btn icon-btn" title="Page refresh: off" aria-label="Page refresh">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M18.5 9A7 7 0 0 0 6.2 6.8L4 9" /><path d="M5.5 15a7 7 0 0 0 12.3 2.2L20 15" /></svg>
         </button>
-        <button id="toc-toggle" class="btn icon-btn" title="Contents" aria-label="Contents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button>
+        <button id="toc-toggle" class="btn icon-btn" title="Chapters" aria-label="Chapters"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button>
         <button id="reader-collapse" class="btn icon-btn" title="Hide controls" aria-label="Hide controls"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg></button>
       </div>
       <div id="reader-fonts" class="reader-fontmenu hidden" role="menu" aria-label="Reading font"></div>
@@ -157,12 +157,19 @@
     <div id="toc-view" class="toc-view hidden">
       <div class="toc-view-head">
         <button id="toc-back" class="btn icon-btn" title="Back to reading" aria-label="Back to reading"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6" /></svg></button>
-        <span>Contents</span>
+        <div id="toc-location" class="toc-location"></div>
+        <div class="toc-segmented" role="tablist" aria-label="Book navigation">
+          <button id="toc-contents-tab" type="button" class="active" role="tab" aria-selected="true">Chapters</button>
+          <button id="toc-bookmarks-tab" type="button" role="tab" aria-selected="false">Bookmarks</button>
+        </div>
       </div>
-      <div id="toc-location" class="toc-location"></div>
       <div id="toc-list" class="toc-list"></div>
+      <div id="bookmarks-list" class="toc-list hidden"></div>
     </div>
     <div id="epub-viewer"></div>
+    <button id="bookmark-toggle" class="bookmark-toggle" type="button" title="Add bookmark" aria-label="Add bookmark" aria-pressed="false">
+      <svg viewBox="0 0 24 32" aria-hidden="true"><path d="M2 1h20v29l-10-7-10 7z" /></svg>
+    </button>
     <div id="reader-flash" class="reader-flash hidden" aria-hidden="true"></div>
     <div id="dict-popover" class="dict-popover hidden" role="dialog" aria-live="polite"></div>
     <div id="reader-loading" class="reader-loading hidden" role="status" aria-live="polite">Loading…</div>

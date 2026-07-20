@@ -10,12 +10,12 @@ const els = {
   library: $("#library"), librarySection: $("#library-section"), inprogress: $("#inprogress"), inprogressSection: $("#inprogress-section"), finished: $("#finished"), finishedSection: $("#finished-section"),
   flatSection: $("#flat-section"), flatResults: $("#flat-results"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
-  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressFill: $("#reader-progress-fill"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"),
+  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressFill: $("#reader-progress-fill"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"),
 };
 
 let currentJob = null;
 let pollTimer = null;
-let progress = { books: {} };
+let progress = { books: {}, bookmarks: {} };
 let allBooks = [];
 let allGroups = [];
 // Library browsing state. `view` (cover|table), `sort` and `dir` persist; the
@@ -34,7 +34,9 @@ let readerView = null;
 // `dictDebounce` coalesces the rapid selectionchange events of a drag-select.
 let dictReqId = 0;
 let dictDebounce = null;
-let currentLocation = { fraction: 0, tocHref: null };
+let currentLocation = { fraction: 0, tocHref: null, cfi: null, label: "Bookmark" };
+let tocTab = "contents";
+let bookmarkSaving = false;
 // Guards progress saving: stays false during open/restore so the transient
 // relocations fired before the book reaches its saved position can't overwrite
 // real progress with a near-zero fraction.
@@ -165,8 +167,10 @@ function fmtDate(iso) {
 }
 
 async function loadProgress() {
-  try { const data = await api("/api/progress"); progress = data && data.books ? data : { books: {} }; }
-  catch { progress = { books: {} }; }
+  try {
+    const data = await api("/api/progress");
+    progress = data && data.books ? { ...data, bookmarks: data.bookmarks || {} } : { books: {}, bookmarks: {} };
+  } catch { progress = { books: {}, bookmarks: {} }; }
 }
 
 function bookProgress(book) { return progress.books[book.id] || {}; }
@@ -206,9 +210,14 @@ async function resyncReaderTo(entry) {
 // trigger a relocate that would save the stale spot.
 async function refreshOpenReaderProgress() {
   if (!currentBook || !readerView || !readerReady) return;
-  let entry;
-  try { const data = await api("/api/progress"); entry = data && data.books ? data.books[currentBook.id] : null; }
+  let entry, data;
+  try { data = await api("/api/progress"); entry = data && data.books ? data.books[currentBook.id] : null; }
   catch { return; }
+  progress.bookmarks ||= {};
+  progress.bookmarks[currentBook.id] = data.bookmarks?.[currentBook.id] || [];
+  if (!progress.bookmarks[currentBook.id].length) delete progress.bookmarks[currentBook.id];
+  updateBookmarkButton();
+  if (tocTab === "bookmarks") renderBookmarks();
   if (!entry || !entry.last_opened) return;
   if (sessionBase && entry.last_opened > sessionBase) {
     progress.books[currentBook.id] = entry;
@@ -640,8 +649,9 @@ async function openReader(book) {
   // Opening + parsing a book can take a few seconds; show a loading overlay so
   // the reader isn't just a blank screen until the first page renders.
   els.readerLoading.textContent = "Loading…"; els.readerLoading.classList.remove("hidden");
-  els.viewer.innerHTML = ""; els.tocList.innerHTML = ""; closeTocView();
-  currentLocation = { fraction: 0, tocHref: null };
+  els.viewer.innerHTML = ""; els.tocList.innerHTML = ""; els.bookmarksList.innerHTML = ""; closeTocView();
+  currentLocation = { fraction: 0, tocHref: null, cfi: null, label: "Bookmark" };
+  updateBookmarkButton();
   readerView = document.createElement("foliate-view");
   readerView.className = "foliate-reader";
   els.viewer.appendChild(readerView);
@@ -651,8 +661,14 @@ async function openReader(book) {
     closeDictPopover();
     const loc = e.detail || {};
     noteReaderRelocate(loc);
-    currentLocation = { fraction: loc.fraction || 0, tocHref: loc.tocItem?.href || null };
+    currentLocation = {
+      fraction: loc.fraction || 0,
+      tocHref: loc.tocItem?.href || null,
+      cfi: loc.cfi || null,
+      label: tocItemLabel(loc.tocItem),
+    };
     updateProgressUI();
+    updateBookmarkButton();
     if (!els.tocView.classList.contains("hidden")) updateTocView();
     if (readerReady) await saveBookProgress(book, loc.cfi || null, loc.fraction || 0);
   });
@@ -714,6 +730,75 @@ function renderToc(items, depth = 0) {
     return `<button class="toc-item" data-href="${escapeHtml(i.href)}" style="padding-left:${16 + depth * 18}px">${escapeHtml(label)}</button>${children.length ? renderToc(children, depth + 1) : ""}`;
   }).join("");
 }
+function tocItemLabel(item) {
+  if (!item) return "Bookmark";
+  if (typeof item.label === "string") return item.label || "Bookmark";
+  return Object.values(item.label || {})[0] || "Bookmark";
+}
+function currentBookmarks() {
+  return currentBook ? (progress.bookmarks?.[currentBook.id] || []) : [];
+}
+function currentBookmark() {
+  return currentLocation.cfi ? currentBookmarks().find((item) => item.cfi === currentLocation.cfi) : null;
+}
+function updateBookmarkButton() {
+  if (!els.bookmarkToggle) return;
+  const marked = !!currentBookmark();
+  const available = !!currentBook && !!currentLocation.cfi;
+  els.bookmarkToggle.classList.toggle("active", marked);
+  els.bookmarkToggle.classList.toggle("unavailable", !available);
+  els.bookmarkToggle.setAttribute("aria-pressed", String(marked));
+  els.bookmarkToggle.setAttribute("aria-label", marked ? "Remove bookmark" : "Add bookmark");
+  els.bookmarkToggle.title = marked ? "Remove bookmark" : "Add bookmark";
+}
+function renderBookmarks() {
+  const items = currentBookmarks().slice().sort((a, b) => (a.percent || 0) - (b.percent || 0));
+  els.bookmarksList.innerHTML = items.length ? items.map((item) => {
+    const pct = Math.round((Number(item.percent) || 0) * 100);
+    const date = fmtDate(item.created_at);
+    return `<button class="toc-item bookmark-item" data-cfi="${escapeHtml(item.cfi)}"><span class="bookmark-item-label">${escapeHtml(item.label || "Bookmark")}</span><span class="bookmark-item-meta">${pct}% through${date ? ` · ${escapeHtml(date)}` : ""}</span></button>`;
+  }).join("") : '<div class="bookmarks-empty">No bookmarks yet. Tap the upper-right corner of a page to add one.</div>';
+}
+function setTocTab(tab) {
+  tocTab = tab === "bookmarks" ? "bookmarks" : "contents";
+  const bookmarks = tocTab === "bookmarks";
+  els.tocContentsTab.classList.toggle("active", !bookmarks);
+  els.tocBookmarksTab.classList.toggle("active", bookmarks);
+  els.tocContentsTab.setAttribute("aria-selected", String(!bookmarks));
+  els.tocBookmarksTab.setAttribute("aria-selected", String(bookmarks));
+  els.tocList.classList.toggle("hidden", bookmarks);
+  els.bookmarksList.classList.toggle("hidden", !bookmarks);
+  els.tocLocation.classList.toggle("hidden", bookmarks);
+  if (bookmarks) { renderBookmarks(); els.bookmarksList.scrollTop = 0; }
+}
+async function toggleBookmark() {
+  if (bookmarkSaving || !currentBook || !currentLocation.cfi) return;
+  bookmarkSaving = true;
+  const bookId = currentBook.id;
+  const cfi = currentLocation.cfi;
+  const bookmarked = !currentBookmark();
+  try {
+    const data = await api("/api/bookmarks", {
+      method: "POST",
+      body: JSON.stringify({
+        book_id: bookId,
+        cfi,
+        bookmarked,
+        percent: currentLocation.fraction || 0,
+        label: currentLocation.label || "Bookmark",
+      }),
+    });
+    progress.bookmarks ||= {};
+    progress.bookmarks[bookId] = data.bookmarks || [];
+    if (!progress.bookmarks[bookId].length) delete progress.bookmarks[bookId];
+    updateBookmarkButton();
+    if (tocTab === "bookmarks") renderBookmarks();
+  } catch (e) {
+    alert(`Couldn't ${bookmarked ? "add" : "remove"} bookmark: ${e.message}`);
+  } finally {
+    bookmarkSaving = false;
+  }
+}
 // Highlight the chapter the reader is currently in, and return its button.
 function markCurrentTocItem() {
   let current = null;
@@ -733,6 +818,7 @@ function openTocView() {
   closeReaderPopups();
   closeDictPopover();
   const current = updateTocView();
+  setTocTab("contents");
   els.tocView.classList.remove("hidden");
   if (current) current.scrollIntoView({ block: "center" });
   else els.tocList.scrollTop = 0;
@@ -1014,6 +1100,10 @@ function edgeTap(turn) {
 }
 onReaderTap(els.hitLeft, edgeTap(() => readerView.goLeft()));
 onReaderTap(els.hitRight, edgeTap(() => readerView.goRight()));
+onReaderTap(els.bookmarkToggle, toggleBookmark);
+els.bookmarkToggle.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleBookmark(); }
+});
 // ---- Dictionary --------------------------------------------------------
 // Wire per-chapter input: a center tap toggles the chrome (the edges are owned
 // by the overlays above), and a drag-select triggers the word lookup.
@@ -1103,7 +1193,10 @@ window.addEventListener("focus", refreshOpenReaderProgress);
 els.tocToggle.addEventListener("click", openTocView);
 els.readerCollapse.addEventListener("click", hideReaderChrome);
 els.tocBack.addEventListener("click", closeTocView);
+els.tocContentsTab.addEventListener("click", () => setTocTab("contents"));
+els.tocBookmarksTab.addEventListener("click", () => setTocTab("bookmarks"));
 els.tocList.addEventListener("click", (e) => { const b = e.target.closest("button[data-href]"); if (b && readerView) { readerView.goTo(b.dataset.href); closeTocView(); } });
+els.bookmarksList.addEventListener("click", (e) => { const b = e.target.closest("button[data-cfi]"); if (b && readerView) { readerView.goTo(b.dataset.cfi); closeTocView(); } });
 els.readerTheme.addEventListener("click", () => { readerSettings.theme = readerSettings.theme === "dark" ? "light" : "dark"; saveReaderSettings(); applyReaderTheme(); });
 els.readerFullscreen.addEventListener("click", toggleFullscreen);
 els.readerColumns.addEventListener("click", () => { readerSettings.columns = !columnsConstrained(); saveReaderSettings(); applyReaderTheme(); });
