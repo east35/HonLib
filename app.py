@@ -565,6 +565,25 @@ def reset_progress():
     return jsonify({"ok": True, "book_id": book_id})
 
 
+@app.route("/api/bookmarks", methods=["POST"])
+def post_bookmark():
+    data = request.get_json(force=True) or {}
+    book_id = (data.get("book_id") or "").strip()
+    cfi = (data.get("cfi") or "").strip()
+    if not book_id:
+        return jsonify({"ok": False, "error": "book_id required"}), 400
+    if not cfi:
+        return jsonify({"ok": False, "error": "cfi required"}), 400
+    bookmarks = progress.update_bookmark(
+        book_id,
+        cfi=cfi,
+        add=bool(data.get("bookmarked")),
+        percent=data.get("percent"),
+        label=data.get("label"),
+    )
+    return jsonify({"ok": True, "book_id": book_id, "bookmarks": bookmarks})
+
+
 @app.route("/api/download", methods=["POST"])
 def start_url_download():
     data = request.get_json(force=True) or {}

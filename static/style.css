@@ -46,3 +46,22 @@
 @media(max-width:640px){.topbar{padding:12px}.topbar-actions{width:100%}#search{max-width:none;flex:1}.library{grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:14px}.lib-section{padding:16px}.reader-controls{gap:4px}.reader-controls .btn{height:42px}.reader-controls .icon-btn{width:38px;flex:0 0 auto}.reader-controls .size-toggle{width:100px;height:42px}.reader-refresh-panel{padding:12px 14px}.hit{top:0}.irc-result{align-items:flex-start}.irc-result .btn{padding:8px 10px}.staging-grid{grid-template-columns:1fr}.c-author{display:none}}
 
 .segmented{display:inline-flex;border:2px solid var(--fg)}.segmented button{background:var(--bg);color:var(--fg);border:0;border-right:2px solid var(--fg);padding:10px 16px;font:inherit;font-size:15px;cursor:pointer;white-space:nowrap}.segmented button:last-child{border-right:0}.segmented button.active{background:var(--fg);color:var(--bg);font-weight:700}.segmented button:disabled{opacity:.4;cursor:default}.modal-head .segmented{margin-right:auto}
+
+/* Contents / bookmarks navigation and the page-corner bookmark affordance. */
+.toc-segmented{display:inline-flex;height:46px;margin-left:auto;border:2px solid var(--fg)}
+.toc-view-head .toc-location{padding:0;border:0;white-space:nowrap}
+.toc-segmented button{background:var(--bg);color:var(--fg);border:0;border-right:2px solid var(--fg);padding:9px 14px;font:inherit;font-size:15px;cursor:pointer}
+.toc-segmented button:last-child{border-right:0}
+.toc-segmented button.active{background:var(--fg);color:var(--bg);font-weight:800}
+.bookmark-item-label{display:block;font-weight:800}
+.bookmark-item-meta{display:block;margin-top:3px;font-size:13px;opacity:.78}
+.bookmarks-empty{padding:24px 16px;font-size:15px}
+.bookmark-toggle{position:absolute;top:0;right:12px;z-index:26;width:58px;height:64px;padding:8px 13px 18px;background:transparent;color:#000;border:0;cursor:pointer}
+.bookmark-toggle svg{display:block;width:28px;height:38px;fill:#fff;stroke:#000;stroke-width:2;visibility:hidden}
+.bookmark-toggle.active svg{fill:#000;visibility:visible}
+.bookmark-toggle.unavailable{visibility:hidden}
+.reader[data-reader-theme="dark"] .toc-segmented{border-color:#fff}
+.reader[data-reader-theme="dark"] .toc-segmented button{background:#000;color:#fff;border-color:#fff}
+.reader[data-reader-theme="dark"] .toc-segmented button.active{background:#fff;color:#000}
+.reader[data-reader-theme="dark"] .bookmark-toggle svg{fill:#000;stroke:#fff}
+.reader[data-reader-theme="dark"] .bookmark-toggle.active svg{fill:#fff}

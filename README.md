@@ -5,7 +5,7 @@
 A self-hosted ebook library and reader you run with Docker. Browse your epub
 collection in the browser, read in a clean paginated reader
 ([foliate-js](https://github.com/johnfactotum/foliate-js)) with themes, fonts,
-tap-to-define dictionary lookup, and progress that syncs across devices.
+tap-to-define dictionary lookup, bookmarks, and progress that syncs across devices.
 
 Licensed [AGPL-3.0](LICENSE).
 
@@ -77,6 +77,8 @@ reader behavior consistent.
   faces like Atkinson Hyperlegible), light/sepia/dark themes
   tuned for e-ink, and tap-a-word dictionary lookups.
 - **Progress sync** — your place in each book follows you between devices.
+- **Bookmarks** — save exact page positions and return to them from the reader's
+  Chapters / Bookmarks view.
 - **Installable** — works as a PWA you can add to a phone or tablet home screen.
 - **Plugin-friendly** — optional acquisition and Android wrapper modules can be
   added as git submodules (see [Optional modules](#optional-modules)).
