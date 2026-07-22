@@ -44,10 +44,13 @@ let readerReady = false;
 let lastRelocateMarker = null;
 let pageTurnsSinceRefresh = 0;
 let refreshFlashTimer = null;
-// The server's `last_opened` token this reader session is synced to. Sent as
-// `base` on each save so the server can reject writes from a session that has
-// fallen behind another device, and refreshed from every accepted response.
-let sessionBase = null;
+// The server's `last_opened` token each book is synced to. Keeping this per book
+// lets an in-flight save finish safely even if the reader opens another book.
+const progressBases = new Map();
+// Relocate events can arrive faster than their requests complete. Event
+// listeners are not awaited by the browser, so serialize saves to prevent an
+// older page request from reaching the server after a newer page request.
+let progressSaveChain = Promise.resolve();
 let readerSettings = JSON.parse(localStorage.getItem("ebook-library.reader") || '{"theme":"light","fontScale":1,"columns":true,"progress":true,"refreshEvery":0}');
 
 // ---- Fonts -------------------------------------------------------------
@@ -152,6 +155,11 @@ async function api(path, opts = {}) {
 function escapeHtml(s) { return String(s || "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function initials(title) { return String(title || "?").split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase(); }
 function fmtPercent(v) { return `${Math.round((Number(v) || 0) * 100)}%`; }
+function isNewerToken(candidate, base) {
+  const candidateTime = Date.parse(candidate), baseTime = Date.parse(base);
+  if (Number.isFinite(candidateTime) && Number.isFinite(baseTime)) return candidateTime > baseTime;
+  return String(candidate) > String(base);
+}
 function fmtDate(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -179,23 +187,34 @@ function isInProgress(book) { return !isFinished(book) && (book.percent || 0) > 
 
 async function saveBookProgress(book, cfi, percent) {
   progress.books[book.id] = { ...(progress.books[book.id] || {}), cfi, percent, last_opened: new Date().toISOString() };
-  try {
-    const res = await fetch("/api/progress", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ book_id: book.id, cfi, percent, base: sessionBase }),
-    });
-    if (res.status === 401) { window.location.href = "/login"; return; }
-    const data = await res.json().catch(() => null);
-    const entry = data && data.entry;
-    if (res.status === 409) {
-      // Another device advanced past our baseline. Adopt its position instead of
-      // overwriting it, and jump the reader there so we stop trailing reality.
-      if (entry) { progress.books[book.id] = entry; sessionBase = entry.last_opened || null; await resyncReaderTo(entry); }
-      return;
-    }
-    if (res.ok && entry) { progress.books[book.id] = entry; sessionBase = entry.last_opened || null; }
-  } catch {}
+  const save = async () => {
+    try {
+      const res = await fetch("/api/progress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ book_id: book.id, cfi, percent, base: progressBases.get(book.id) || null }),
+      });
+      if (res.status === 401) { window.location.href = "/login"; return; }
+      const data = await res.json().catch(() => null);
+      const entry = data && data.entry;
+      if (res.status === 409) {
+        // Another device advanced past our baseline. Adopt its position instead
+        // of overwriting it, and jump an open reader there.
+        if (entry) {
+          progress.books[book.id] = entry;
+          progressBases.set(book.id, entry.last_opened || null);
+          if (currentBook?.id === book.id) await resyncReaderTo(entry);
+        }
+        return;
+      }
+      if (res.ok && entry) {
+        progress.books[book.id] = entry;
+        progressBases.set(book.id, entry.last_opened || null);
+      }
+    } catch {}
+  };
+  progressSaveChain = progressSaveChain.then(save, save);
+  return progressSaveChain;
 }
 
 // Jump the open reader to a server-authoritative position (after a stale-write
@@ -219,9 +238,10 @@ async function refreshOpenReaderProgress() {
   updateBookmarkButton();
   if (tocTab === "bookmarks") renderBookmarks();
   if (!entry || !entry.last_opened) return;
-  if (sessionBase && entry.last_opened > sessionBase) {
+  const base = progressBases.get(currentBook.id);
+  if (base && isNewerToken(entry.last_opened, base)) {
     progress.books[currentBook.id] = entry;
-    sessionBase = entry.last_opened;
+    progressBases.set(currentBook.id, entry.last_opened);
     await resyncReaderTo(entry);
   }
 }
@@ -642,8 +662,8 @@ async function openReader(book) {
     await loadProgress();
     const fresh = progress.books[book.id];
     if (fresh) book = { ...book, ...fresh };
-    sessionBase = fresh ? fresh.last_opened || null : null;
-  } catch { sessionBase = null; }
+    progressBases.set(book.id, fresh ? fresh.last_opened || null : null);
+  } catch { progressBases.set(book.id, null); }
   currentBook = book;
   els.reader.classList.remove("chrome-hidden");
   // Opening + parsing a book can take a few seconds; show a loading overlay so
