@@ -11,7 +11,18 @@ _lock = threading.Lock()
 
 
 def _now_iso():
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    # Progress can be written several times in one second while paging. Keep
+    # microseconds so every accepted position gets a distinct conflict token.
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _is_older(candidate, current):
+    """Compare ISO timestamps safely across legacy second/microsecond formats."""
+    try:
+        parse = lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parse(candidate) < parse(current)
+    except (TypeError, ValueError):
+        return str(candidate) < str(current)
 
 
 def load_progress():
@@ -51,7 +62,7 @@ def update_book_progress(book_id, *, cfi=None, percent=None, base=None):
         # position from. If we already hold a newer one, another device advanced
         # after this session synced — reject the write so a stale tab can't clobber
         # newer progress. Equal timestamps (same-second concurrent) are allowed.
-        if base and current and current.get("last_opened") and base < current["last_opened"]:
+        if base and current and current.get("last_opened") and _is_older(base, current["last_opened"]):
             return {"stale": True, "entry": current}
         entry = data["books"].setdefault(book_id, {})
         if cfi is not None:
