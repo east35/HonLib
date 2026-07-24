@@ -303,6 +303,27 @@ function displaySeriesName(name) {
   const m = /^the\s+(.+)$/i.exec(s);
   return m ? `${m[1]}, The` : s;
 }
+// Series names already present in the library, for the staging form's Series
+// autocomplete. Books carry an explicit `series` from their EPUB metadata;
+// folder names count too, since a series folder is often the only place the
+// name is recorded. That mix is why names are deduped on the same leading-"The"
+// -insensitive key the library sorts by: a folder "dark tower" and a metadata
+// "The Dark Tower" are one series, not two suggestions. Metadata is added first
+// so its spelling is the one offered. Values stay as recorded — the "The" flip
+// is for display only and would be wrong to write into a book's metadata.
+function knownSeriesNames() {
+  const seen = new Map();
+  const add = (raw) => {
+    const name = (raw || "").trim();
+    if (!name || name === "Library") return;
+    const key = displaySeriesName(name).replace(/,\s*the$/i, "").toLowerCase();
+    if (!seen.has(key)) seen.set(key, name);
+  };
+  for (const b of allBooks) add(b.series);
+  for (const b of allBooks) add(b.group);
+  return [...seen.values()].sort((a, b) =>
+    displaySeriesName(a).localeCompare(displaySeriesName(b), undefined, { sensitivity: "base" }));
+}
 const SECTION_KEYS = {
   series: (b) => b.group || "Library",
   title: (b) => firstLetter(b.title),
@@ -549,7 +570,7 @@ function renderStaging(items) {
       <div class="staging-grid">
         <label>Title<input data-meta="title" type="text" value="${escapeHtml(item.title || "")}" autocomplete="off"></label>
         <label>Author<input data-meta="author" type="text" value="${escapeHtml(item.author || "")}" autocomplete="off"></label>
-        <label>Series<input data-meta="series" type="text" value="${escapeHtml(item.series || "")}" autocomplete="off"></label>
+        <label>Series<input data-meta="series" type="text" list="staging-series-options" value="${escapeHtml(item.series || "")}" autocomplete="off"></label>
         <label>Book #<input data-meta="series_index" type="text" inputmode="decimal" value="${escapeHtml(item.series_index || "")}" autocomplete="off"></label>
       </div>
       <div class="cover-tools">
@@ -558,6 +579,7 @@ function renderStaging(items) {
       </div>
       <div class="row"><button class="btn primary" data-stage-import="${escapeHtml(item.id)}">Import</button></div>
     </div>
+    <datalist id="staging-series-options">${knownSeriesNames().map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}</datalist>
   `;
   els.stagingResults.querySelectorAll("[data-cover-search]").forEach((button) => {
     button.addEventListener("click", async () => {
