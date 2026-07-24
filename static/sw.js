@@ -2,7 +2,7 @@
 // Network-first for the shell (so rebuilds are picked up), cache fallback when
 // offline. API calls and book files are never cached (always live).
 
-const CACHE = "ebook-library-v4";
+const CACHE = "ebook-library-v5";
 const SHELL = [
   "/",
   "/index.html",

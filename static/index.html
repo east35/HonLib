@@ -173,7 +173,12 @@
     <div id="reader-flash" class="reader-flash hidden" aria-hidden="true"></div>
     <div id="dict-popover" class="dict-popover hidden" role="dialog" aria-live="polite"></div>
     <div id="reader-loading" class="reader-loading hidden" role="status" aria-live="polite">Loading…</div>
-    <div id="reader-progress" class="reader-progress hidden" aria-hidden="true"><div id="reader-progress-fill" class="reader-progress-fill"></div></div>
+    <div id="reader-progress" class="reader-progress hidden" aria-hidden="true">
+      <div id="reader-progress-label" class="reader-progress-label hidden"></div>
+      <div id="reader-progress-track" class="reader-progress-track"><div id="reader-progress-fill" class="reader-progress-fill"></div></div>
+      <div id="reader-progress-segments" class="reader-progress-segments hidden"></div>
+    </div>
+    <button id="reader-progress-cycle" class="progress-cycle hidden" type="button" title="Reading progress detail" aria-label="Cycle reading progress detail"></button>
     <div id="reader-hit-left" class="hit left"></div><div id="reader-hit-center" class="hit center"></div><div id="reader-hit-right" class="hit right"></div>
   </div>
 
