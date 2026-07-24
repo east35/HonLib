@@ -261,6 +261,40 @@ def _safe_name(value, fallback):
     return value or fallback
 
 
+# Folder identity used when filing an imported book. Case and a leading (or
+# trailing ", ") "The" are ignored, matching how the library sorts and how the
+# staging form's series autocomplete dedupes its suggestions.
+def _folder_key(name):
+    value = re.sub(r"\s+", " ", str(name or "").strip())
+    value = re.sub(r"^the\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r",\s*the$", "", value, flags=re.IGNORECASE)
+    return value.casefold()
+
+
+def _library_dir_for(root, name):
+    """Reuse the folder this series/author is already filed under, if any.
+
+    Without this, the folder name is whatever string the importer typed, so
+    "Dark Tower" and "The Dark Tower" become separate directories -- and since
+    a book's group is its parent folder name, the series then splits into two
+    sections in the library. Case-insensitive filesystems (macOS) hide the
+    case-only half of this; the Linux container it runs on does not. Existing
+    folders are never renamed, only reused: matching is sorted so a library
+    that already holds a split keeps picking the same side of it.
+    """
+    key = _folder_key(name)
+    if not key:
+        return root / name
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return root / name
+    for entry in entries:
+        if entry.is_dir() and _folder_key(entry.name) == key:
+            return entry
+    return root / name
+
+
 def _unique_destination(path):
     if not path.exists():
         return path
@@ -293,9 +327,9 @@ def _library_destination_for(path):
     root = Path(current_library_folder()).resolve()
     if series:
         prefix = f"{series_index} - " if series_index else ""
-        dest = root / series / f"{prefix}{title}.epub"
+        dest = _library_dir_for(root, series) / f"{prefix}{title}.epub"
     else:
-        dest = root / author / f"{title}.epub"
+        dest = _library_dir_for(root, author) / f"{title}.epub"
     return _unique_destination(dest)
 
 

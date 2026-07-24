@@ -10,7 +10,7 @@ const els = {
   library: $("#library"), librarySection: $("#library-section"), inprogress: $("#inprogress"), inprogressSection: $("#inprogress-section"), finished: $("#finished"), finishedSection: $("#finished-section"),
   flatSection: $("#flat-section"), flatResults: $("#flat-results"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
-  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressFill: $("#reader-progress-fill"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"),
+  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"),
 };
 
 let currentJob = null;
@@ -34,7 +34,11 @@ let readerView = null;
 // `dictDebounce` coalesces the rapid selectionchange events of a drag-select.
 let dictReqId = 0;
 let dictDebounce = null;
-let currentLocation = { fraction: 0, tocHref: null, cfi: null, label: "Bookmark" };
+let currentLocation = { fraction: 0, tocHref: null, cfi: null, label: "Bookmark", sectionIndex: 0, timeSection: null, timeTotal: null };
+// Per-spine-section widths of the book bar, and the segment elements built from
+// them. Rebuilt once per book (see buildProgressSegments).
+let sectionFractions = [];
+let progressSegments = [];
 let tocTab = "contents";
 let bookmarkSaving = false;
 // Guards progress saving: stays false during open/restore so the transient
@@ -51,7 +55,7 @@ const progressBases = new Map();
 // listeners are not awaited by the browser, so serialize saves to prevent an
 // older page request from reaching the server after a newer page request.
 let progressSaveChain = Promise.resolve();
-let readerSettings = JSON.parse(localStorage.getItem("ebook-library.reader") || '{"theme":"light","fontScale":1,"columns":true,"progress":true,"refreshEvery":0}');
+let readerSettings = JSON.parse(localStorage.getItem("ebook-library.reader") || '{"theme":"light","fontScale":1,"columns":true,"progress":true,"progressMode":0,"refreshEvery":0}');
 
 // ---- Fonts -------------------------------------------------------------
 // Curated reading fonts, served from /vendor/fonts. `stack` is the CSS
@@ -132,6 +136,18 @@ const COLUMNS_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentCol
 // Reading-progress toggle. "On" shows a part-filled bar; "off" an empty one.
 const PROGRESS_ON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="10" width="18" height="4" rx="2" /><path d="M6 12h5" stroke-width="3" /></svg>';
 const PROGRESS_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="10" width="18" height="4" rx="2" /></svg>';
+// The detail cycle a bottom-right tap steps through while progress is on. The
+// toolbar button still switches the whole readout on and off; turning it off
+// rewinds the cycle so it always resumes at the plain chapter bar.
+// `scope`: which bar is drawn. `label`: what (if anything) is written above it.
+const PROGRESS_MODES = [
+  { scope: "chapter", label: "none", name: "chapter bar" },
+  { scope: "chapter", label: "percent", name: "chapter bar + percent" },
+  { scope: "chapter", label: "time", name: "chapter bar + time left" },
+  { scope: "book", label: "none", name: "book bar" },
+  { scope: "book", label: "percent", name: "book bar + percent" },
+  { scope: "book", label: "time", name: "book bar + time left" },
+];
 if (!(readerSettings.fontScale > 0)) readerSettings.fontScale = 1;
 readerSettings.fontScale = Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, readerSettings.fontScale));
 readerSettings.refreshEvery = Math.max(0, Math.min(25, Math.round(Number(readerSettings.refreshEvery) || 0)));
@@ -286,6 +302,27 @@ function displaySeriesName(name) {
   const s = (name || "").trim();
   const m = /^the\s+(.+)$/i.exec(s);
   return m ? `${m[1]}, The` : s;
+}
+// Series names already present in the library, for the staging form's Series
+// autocomplete. Books carry an explicit `series` from their EPUB metadata;
+// folder names count too, since a series folder is often the only place the
+// name is recorded. That mix is why names are deduped on the same leading-"The"
+// -insensitive key the library sorts by: a folder "dark tower" and a metadata
+// "The Dark Tower" are one series, not two suggestions. Metadata is added first
+// so its spelling is the one offered. Values stay as recorded — the "The" flip
+// is for display only and would be wrong to write into a book's metadata.
+function knownSeriesNames() {
+  const seen = new Map();
+  const add = (raw) => {
+    const name = (raw || "").trim();
+    if (!name || name === "Library") return;
+    const key = displaySeriesName(name).replace(/,\s*the$/i, "").toLowerCase();
+    if (!seen.has(key)) seen.set(key, name);
+  };
+  for (const b of allBooks) add(b.series);
+  for (const b of allBooks) add(b.group);
+  return [...seen.values()].sort((a, b) =>
+    displaySeriesName(a).localeCompare(displaySeriesName(b), undefined, { sensitivity: "base" }));
 }
 const SECTION_KEYS = {
   series: (b) => b.group || "Library",
@@ -533,7 +570,7 @@ function renderStaging(items) {
       <div class="staging-grid">
         <label>Title<input data-meta="title" type="text" value="${escapeHtml(item.title || "")}" autocomplete="off"></label>
         <label>Author<input data-meta="author" type="text" value="${escapeHtml(item.author || "")}" autocomplete="off"></label>
-        <label>Series<input data-meta="series" type="text" value="${escapeHtml(item.series || "")}" autocomplete="off"></label>
+        <label>Series<input data-meta="series" type="text" list="staging-series-options" value="${escapeHtml(item.series || "")}" autocomplete="off"></label>
         <label>Book #<input data-meta="series_index" type="text" inputmode="decimal" value="${escapeHtml(item.series_index || "")}" autocomplete="off"></label>
       </div>
       <div class="cover-tools">
@@ -542,6 +579,7 @@ function renderStaging(items) {
       </div>
       <div class="row"><button class="btn primary" data-stage-import="${escapeHtml(item.id)}">Import</button></div>
     </div>
+    <datalist id="staging-series-options">${knownSeriesNames().map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}</datalist>
   `;
   els.stagingResults.querySelectorAll("[data-cover-search]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -670,7 +708,9 @@ async function openReader(book) {
   // the reader isn't just a blank screen until the first page renders.
   els.readerLoading.textContent = "Loading…"; els.readerLoading.classList.remove("hidden");
   els.viewer.innerHTML = ""; els.tocList.innerHTML = ""; els.bookmarksList.innerHTML = ""; closeTocView();
-  currentLocation = { fraction: 0, tocHref: null, cfi: null, label: "Bookmark" };
+  currentLocation = { fraction: 0, tocHref: null, cfi: null, label: "Bookmark", sectionIndex: 0, timeSection: null, timeTotal: null };
+  sectionFractions = []; progressSegments = [];
+  if (els.readerProgressSegments) els.readerProgressSegments.innerHTML = "";
   updateBookmarkButton();
   readerView = document.createElement("foliate-view");
   readerView.className = "foliate-reader";
@@ -686,6 +726,11 @@ async function openReader(book) {
       tocHref: loc.tocItem?.href || null,
       cfi: loc.cfi || null,
       label: tocItemLabel(loc.tocItem),
+      // foliate derives these from the spine section sizes: which section we're
+      // in, and the minutes left in it and in the whole book.
+      sectionIndex: loc.section?.current ?? 0,
+      timeSection: Number.isFinite(loc.time?.section) ? loc.time.section : null,
+      timeTotal: Number.isFinite(loc.time?.total) ? loc.time.total : null,
     };
     updateProgressUI();
     updateBookmarkButton();
@@ -718,6 +763,10 @@ async function openReader(book) {
   // The TOC is available as soon as the book is parsed; render it now so it
   // never depends on layout/render timing (which is flaky on slow devices).
   els.tocList.innerHTML = renderToc(readerView.book?.toc || []);
+  // Section sizes are known once the book is parsed; build the book bar's
+  // segments now so the first relocate can paint them.
+  try { sectionFractions = readerView.getSectionFractions?.() || []; } catch { sectionFractions = []; }
+  buildProgressSegments();
   readerView.renderer.setAttribute("flow", "paginated");
   readerView.renderer.setAttribute("max-column-count", "1");
   // Wait for the viewer to have a real size before measuring/navigating — on
@@ -921,16 +970,94 @@ function chapterFraction() {
     return r.atEnd ? 1 : 0;
   } catch { return 0; }
 }
+function progressModeIndex() {
+  const raw = Math.round(Number(readerSettings.progressMode) || 0);
+  return raw >= 0 && raw < PROGRESS_MODES.length ? raw : 0;
+}
+function progressMode() { return PROGRESS_MODES[progressModeIndex()]; }
+function cycleProgressMode() {
+  readerSettings.progressMode = (progressModeIndex() + 1) % PROGRESS_MODES.length;
+  saveReaderSettings();
+  updateProgressUI();
+}
+// Minutes remaining -> "h:mm". foliate estimates from section byte sizes at a
+// fixed 1600 chars/minute, so this is a steady book-wide estimate rather than a
+// measure of how fast this reader actually reads.
+function formatTimeLeft(minutes) {
+  if (!Number.isFinite(minutes) || minutes < 0) return "";
+  const total = Math.round(minutes);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+// Both readouts follow the bar they sit above: the chapter modes describe the
+// current chapter, the book modes the whole book.
+function progressLabelText(mode) {
+  const chapter = mode.scope === "chapter";
+  if (mode.label === "percent") {
+    const fraction = chapter ? chapterFraction() : currentLocation.fraction || 0;
+    return `${Math.round(fraction * 100)}%`;
+  }
+  if (mode.label !== "time") return "";
+  const time = formatTimeLeft(chapter ? currentLocation.timeSection : currentLocation.timeTotal);
+  return time ? `${time} left in ${chapter ? "chapter" : "book"}` : "";
+}
+// The book bar is one segment per spine section, sized by that section's share
+// of the book — so a chapter twice as long as its neighbours is twice as wide.
+// Sections foliate gives no size (non-linear front/back matter) are skipped.
+function buildProgressSegments() {
+  progressSegments = [];
+  if (!els.readerProgressSegments) return;
+  els.readerProgressSegments.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < sectionFractions.length - 1; i++) {
+    const share = sectionFractions[i + 1] - sectionFractions[i];
+    if (!(share > 0)) continue;
+    const seg = document.createElement("div");
+    seg.className = "reader-progress-seg";
+    seg.style.flexGrow = String(share);
+    const fill = document.createElement("div");
+    fill.className = "reader-progress-fill";
+    seg.appendChild(fill);
+    frag.appendChild(seg);
+    progressSegments.push({ index: i, fill });
+  }
+  els.readerProgressSegments.appendChild(frag);
+}
+function paintProgressSegments() {
+  const current = currentLocation.sectionIndex ?? 0;
+  const within = chapterFraction() * 100;
+  for (const { index, fill } of progressSegments) {
+    const pct = index < current ? 100 : index > current ? 0 : within;
+    fill.style.width = `${pct.toFixed(1)}%`;
+  }
+}
 function updateProgressUI() {
   if (!els.readerProgress) return;
   const on = progressEnabled();
   els.readerProgress.classList.toggle("hidden", !on);
-  if (on && els.readerProgressFill) els.readerProgressFill.style.width = `${(chapterFraction() * 100).toFixed(1)}%`;
+  els.readerProgressCycle?.classList.toggle("hidden", !on);
+  if (!on) return;
+  const mode = progressMode();
+  // A book with no usable section sizes can't be segmented; fall back to a
+  // single bar showing the overall fraction rather than an empty strip.
+  const segmented = mode.scope === "book" && progressSegments.length > 1;
+  els.readerProgressTrack?.classList.toggle("hidden", segmented);
+  els.readerProgressSegments?.classList.toggle("hidden", !segmented);
+  if (segmented) paintProgressSegments();
+  else if (els.readerProgressFill) {
+    const fraction = mode.scope === "book" ? currentLocation.fraction || 0 : chapterFraction();
+    els.readerProgressFill.style.width = `${(fraction * 100).toFixed(1)}%`;
+  }
+  if (els.readerProgressLabel) {
+    const text = progressLabelText(mode);
+    els.readerProgressLabel.textContent = text;
+    els.readerProgressLabel.classList.toggle("hidden", !text);
+  }
+  if (els.readerProgressCycle) els.readerProgressCycle.title = `Reading progress: ${mode.name}`;
 }
 function updateProgressButton() {
   if (!els.readerProgressToggle) return;
   els.readerProgressToggle.innerHTML = progressEnabled() ? PROGRESS_ON_SVG : PROGRESS_OFF_SVG;
-  els.readerProgressToggle.title = progressEnabled() ? "Reading progress: on" : "Reading progress: off";
+  els.readerProgressToggle.title = progressEnabled() ? `Reading progress: ${progressMode().name}` : "Reading progress: off";
 }
 function refreshEveryPages() { return Math.max(0, Math.min(25, Math.round(Number(readerSettings.refreshEvery) || 0))); }
 function formatRefreshEvery(value) { return value > 0 ? `After ${value} ${value === 1 ? "Page" : "Pages"}` : "Off"; }
@@ -1124,6 +1251,17 @@ onReaderTap(els.bookmarkToggle, toggleBookmark);
 els.bookmarkToggle.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleBookmark(); }
 });
+// The bottom-right corner sits inside the right page-turn overlay, so it takes
+// the same first-tap dismissals before it starts cycling the progress detail.
+onReaderTap(els.readerProgressCycle, () => {
+  if (!els.dictPopover.classList.contains("hidden")) { closeDictPopover(); return; }
+  if (!els.reader.classList.contains("chrome-hidden")) { hideReaderChrome(); return; }
+  cycleProgressMode();
+  updateProgressButton();
+});
+els.readerProgressCycle.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); cycleProgressMode(); updateProgressButton(); }
+});
 // ---- Dictionary --------------------------------------------------------
 // Wire per-chapter input: a center tap toggles the chrome (the edges are owned
 // by the overlays above), and a drag-select triggers the word lookup.
@@ -1220,7 +1358,14 @@ els.bookmarksList.addEventListener("click", (e) => { const b = e.target.closest(
 els.readerTheme.addEventListener("click", () => { readerSettings.theme = readerSettings.theme === "dark" ? "light" : "dark"; saveReaderSettings(); applyReaderTheme(); });
 els.readerFullscreen.addEventListener("click", toggleFullscreen);
 els.readerColumns.addEventListener("click", () => { readerSettings.columns = !columnsConstrained(); saveReaderSettings(); applyReaderTheme(); });
-els.readerProgressToggle.addEventListener("click", () => { readerSettings.progress = !progressEnabled(); saveReaderSettings(); updateProgressButton(); updateProgressUI(); });
+els.readerProgressToggle.addEventListener("click", () => {
+  const on = !progressEnabled();
+  readerSettings.progress = on;
+  // Switching the readout off rewinds the detail cycle, so the next time it is
+  // switched on it starts from the plain chapter bar again.
+  if (!on) readerSettings.progressMode = 0;
+  saveReaderSettings(); updateProgressButton(); updateProgressUI();
+});
 els.sizeToggle.addEventListener("click", (e) => {
   const fontButton = e.target.closest('button[data-role="font-menu"]');
   if (fontButton) return toggleReaderFontMenu();
