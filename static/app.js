@@ -10,7 +10,7 @@ const els = {
   library: $("#library"), librarySection: $("#library-section"), inprogress: $("#inprogress"), inprogressSection: $("#inprogress-section"), finished: $("#finished"), finishedSection: $("#finished-section"),
   flatSection: $("#flat-section"), flatResults: $("#flat-results"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
-  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"),
+  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
 };
 
 let currentJob = null;
@@ -107,6 +107,7 @@ const FONT_SCALE_STEP = 1.08;     // each +/- press changes the type ~8%
 const FONT_SCALE_MIN = 0.6;       // clamp: smallest the stepper can reach
 const FONT_SCALE_MAX = 2.0;       // clamp: largest the stepper can reach
 const READER_LINE_HEIGHT = 1.5;   // 150%
+const PREV_ZONE_FRAC = 0.15;      // left share of the screen that turns back
 const READER_GAP_PCT = 6;         // side padding (% of view) when constrained
 const READER_MARGIN_PX = 40;      // top/bottom padding when constrained
 const READER_MAX_INLINE = 720;    // max column width (px) when constrained
@@ -1191,8 +1192,8 @@ function stepFontScale(dir) {
   saveReaderSettings();
   applyReaderTheme();
 }
-// The center tap only toggles the reading menu (chrome). Fullscreen is a
-// separate, explicit control so the two can never get out of sync.
+// The bottom edge bar is the only tap that toggles the reading menu (chrome).
+// Fullscreen is a separate, explicit control so the two can never get out of sync.
 function toggleReaderChrome() {
   els.reader.classList.toggle("chrome-hidden");
   if (els.reader.classList.contains("chrome-hidden")) closeReaderPopups();
@@ -1209,22 +1210,35 @@ function toggleFullscreen() {
 function updateFullscreenButton() {
   if (els.readerFullscreen) els.readerFullscreen.innerHTML = document.fullscreenElement ? FS_EXIT_SVG : FS_ENTER_SVG;
 }
-// Page turning is driven by the host-level edge overlays (.hit.left/.right),
-// NOT from inside the book iframe. In paginated mode foliate lays the whole
-// chapter out as one very wide iframe inset by the reading margins, so taps in
-// the margin gutters never reach the iframe and in-iframe coordinates are in
-// chapter-strip space, not screen space — both of which made tap-to-turn
-// unreliable. The overlays sit over those margins (which hold no text, so they
-// don't fight text selection) and read plain host coordinates. The center
-// overlay stays pointer-transparent so taps fall through to the book for the
-// chrome toggle and so drags reach the text for the dictionary.
+// Page turning is decided in SCREEN space, not by which element caught the tap:
+// left PREV_ZONE_FRAC of the window turns back, the rest turns forward. The same
+// rule is applied at all three places a tap can land, because in paginated mode
+// foliate lays the chapter out as one very wide iframe inset by the reading
+// margins:
+//   1. .hit.left/.right — overlays over the dead margin gutter. Taps there never
+//      reach the iframe, so something host-level has to catch them.
+//   2. #epub-viewer — the rest of the non-text space (the gutter is only
+//      READER_GAP_PCT/2 per side when constrained, ~2rem when not, and it moves
+//      with the layout, so the overlays can't be sized to it reliably).
+//   3. the book document itself — see wireReaderInput.
+// Case 3 is why the overlays are kept narrow: an overlay wide enough to be a
+// comfortable target would sit on top of real text and swallow the press-and-
+// hold and drag that dictionary lookup needs, which is exactly what limited
+// word selection to the middle of the screen. In-iframe coordinates are in
+// chapter-strip space, so they are converted to host space via the frame rect
+// (the same conversion evaluateSelection already does for the selection rect) —
+// that conversion is correct however foliate has positioned the frame.
 // A reliable tap = a short, near-stationary press (synthetic `click` is dropped
 // by e-ink WebViews when a tap drifts a pixel, which is why taps "did nothing").
 function onReaderTap(el, handler) {
   let sx = 0, sy = 0, st = 0, moved = false, down = false;
+  let dictWasOpen = false;
   el.addEventListener("pointerdown", (e) => {
     if (!e.isPrimary) return;
     down = true; moved = false; sx = e.clientX; sy = e.clientY; st = Date.now();
+    // Captured here because the document-level pointerdown listener closes the
+    // definition popover before this pointerup runs — see dictTapConsumed.
+    dictWasOpen = !els.dictPopover.classList.contains("hidden");
   });
   el.addEventListener("pointermove", (e) => {
     if (down && (Math.abs(e.clientX - sx) > 12 || Math.abs(e.clientY - sy) > 12)) moved = true;
@@ -1233,29 +1247,66 @@ function onReaderTap(el, handler) {
     if (!down) return;
     down = false;
     if (moved || Date.now() - st > 500) return;
-    handler(e);
+    handler(e, dictWasOpen);
   });
 }
-// An edge tap: dismiss any open definition/chrome first (so the first tap near
-// the edge doesn't also flip a page), otherwise turn the page.
-function edgeTap(turn) {
-  return () => {
-    if (!els.dictPopover.classList.contains("hidden")) { closeDictPopover(); return; }
-    if (!els.reader.classList.contains("chrome-hidden")) { hideReaderChrome(); return; }
-    if (readerView) turn();
-  };
+// Was this tap spent dismissing a definition? Host-level taps can't just check
+// whether the popover is open now: the document pointerdown listener has already
+// closed it by the time pointerup runs, so the tap would look innocent and go on
+// to turn the page as well. `dictWasOpen` is the state at pointerdown, which
+// keeps the dismissal attributed to the tap that caused it. Taps inside the book
+// never reach that listener, so they can pass nothing and be read live.
+function dictTapConsumed(dictWasOpen) {
+  if (!dictWasOpen && els.dictPopover.classList.contains("hidden")) return false;
+  closeDictPopover();
+  return true;
 }
-onReaderTap(els.hitLeft, edgeTap(() => readerView.goLeft()));
-onReaderTap(els.hitRight, edgeTap(() => readerView.goRight()));
+// The first tap dismisses an open definition or an open menu instead of turning,
+// so a tap to put something away never also flips the page.
+function readerTapConsumed(dictWasOpen) {
+  if (dictTapConsumed(dictWasOpen)) return true;
+  if (!els.reader.classList.contains("chrome-hidden")) { hideReaderChrome(); return true; }
+  return false;
+}
+// Turn the page for a tap at host x.
+function turnAtHostX(hostX) {
+  if (hostX < window.innerWidth * PREV_ZONE_FRAC) readerPrev();
+  else readerNext();
+}
+function pageTurnTap(e, dictWasOpen) {
+  if (readerTapConsumed(dictWasOpen)) return;
+  turnAtHostX(e.clientX);
+}
+onReaderTap(els.hitLeft, pageTurnTap);
+onReaderTap(els.hitRight, pageTurnTap);
+// Taps that land on the viewer are in the margin space around the text the
+// narrow overlays don't cover; they are already in host coordinates.
+onReaderTap(els.viewer, pageTurnTap);
+// The top edge bar closes the book. It deliberately skips the chrome-hidden
+// dismissal the page-turn edges do: leaving should never cost a second tap.
+onReaderTap(els.hitBack, (e, dictWasOpen) => {
+  if (dictTapConsumed(dictWasOpen)) return;
+  closeReader();
+});
+els.hitBack.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); closeReader(); }
+});
+// The bottom edge bar is the dedicated reading-menu target.
+onReaderTap(els.hitMenu, (e, dictWasOpen) => {
+  if (dictTapConsumed(dictWasOpen)) return;
+  toggleReaderChrome();
+});
+els.hitMenu.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleReaderChrome(); }
+});
 onReaderTap(els.bookmarkToggle, toggleBookmark);
 els.bookmarkToggle.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleBookmark(); }
 });
 // The bottom-right corner sits inside the right page-turn overlay, so it takes
 // the same first-tap dismissals before it starts cycling the progress detail.
-onReaderTap(els.readerProgressCycle, () => {
-  if (!els.dictPopover.classList.contains("hidden")) { closeDictPopover(); return; }
-  if (!els.reader.classList.contains("chrome-hidden")) { hideReaderChrome(); return; }
+onReaderTap(els.readerProgressCycle, (e, dictWasOpen) => {
+  if (readerTapConsumed(dictWasOpen)) return;
   cycleProgressMode();
   updateProgressButton();
 });
@@ -1263,8 +1314,10 @@ els.readerProgressCycle.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); cycleProgressMode(); updateProgressButton(); }
 });
 // ---- Dictionary --------------------------------------------------------
-// Wire per-chapter input: a center tap toggles the chrome (the edges are owned
-// by the overlays above), and a drag-select triggers the word lookup.
+// Wire per-chapter input. Text gets the full gesture set: a tap turns the page
+// by the same screen-space zone rule as the overlays, while a press-and-hold or
+// drag anywhere over the text — including under the prev/next zones — is a
+// selection gesture and triggers the word lookup instead.
 function wireReaderInput(doc) {
   let sx = 0, sy = 0, st = 0, moved = false, tracking = false;
   doc.addEventListener("pointerdown", (e) => {
@@ -1281,11 +1334,13 @@ function wireReaderInput(doc) {
     if (moved || Date.now() - st > 500) return;
     const sel = doc.getSelection();
     if (sel && !sel.isCollapsed) return;
-    // A tap dismisses an open definition without also toggling the chrome.
-    if (!els.dictPopover.classList.contains("hidden")) { closeDictPopover(); return; }
+    if (readerTapConsumed()) return;
     // Let foliate handle in-book links.
     if (e.target.closest && e.target.closest("a")) return;
-    toggleReaderChrome();
+    // Convert the tap out of chapter-strip space before applying the zone rule.
+    const frame = doc.defaultView && doc.defaultView.frameElement;
+    const fr = frame ? frame.getBoundingClientRect() : els.viewer.getBoundingClientRect();
+    turnAtHostX(fr.left + e.clientX);
   }, true);
   doc.addEventListener("selectionchange", () => {
     clearTimeout(dictDebounce);
