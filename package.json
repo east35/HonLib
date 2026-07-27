@@ -3,7 +3,9 @@
   "private": true,
   "scripts": {
     "test:scripted-epub": "bash scripts/test-scripted-epub.sh",
-    "test:scripted-epub:browser": "node tests/browser/scripted-epub.mjs"
+    "test:scripted-epub:browser": "node tests/browser/scripted-epub.mjs",
+    "test:reader": "bash scripts/test-reader.sh chapter-progress.mjs",
+    "test:chapter-progress": "bash scripts/test-reader.sh chapter-progress.mjs"
   },
   "devDependencies": {
     "playwright": "1.58.2"

@@ -58,3 +58,34 @@ jobs:
         env:
           HONLIB_BROWSER: ${{ matrix.browser }}
         run: npm run test:scripted-epub
+
+  reader:
+    name: Reader (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Initialize Foliate
+        run: git submodule update --init static/vendor/foliate-js
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          npm ci
+      - name: Install browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Test reading progress and position tracking
+        env:
+          HONLIB_BROWSER: ${{ matrix.browser }}
+        run: npm run test:reader
