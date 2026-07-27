@@ -57,6 +57,29 @@ let refreshFlashTimer = null;
 // The server's `last_opened` token each book is synced to. Keeping this per book
 // lets an in-flight save finish safely even if the reader opens another book.
 const progressBases = new Map();
+// Book id -> the CFIs this session has written for it. A resync exists to catch
+// up to another device; when the position handed back is one we wrote ourselves
+// there is nothing to catch up to, and jumping to it drags the reader backwards.
+// Only writes a backend might still be echoing back can matter, and it is never
+// more than a handful behind, so this keeps a short window rather than growing
+// for the whole of a long reading session.
+const ownWrites = new Map();
+const OWN_WRITE_MEMORY = 50;
+function noteOwnWrite(bookId, cfi) {
+  if (!cfi) return;
+  let seen = ownWrites.get(bookId);
+  if (!seen) ownWrites.set(bookId, (seen = new Set()));
+  // Re-inserting moves a repeated CFI back to the end of the eviction order.
+  seen.delete(cfi);
+  seen.add(cfi);
+  for (const oldest of seen) {
+    if (seen.size <= OWN_WRITE_MEMORY) break;
+    seen.delete(oldest);
+  }
+}
+function isOwnWrite(bookId, cfi) {
+  return !!cfi && !!ownWrites.get(bookId)?.has(cfi);
+}
 // Relocate events can arrive faster than their requests complete. Event
 // listeners are not awaited by the browser, so serialize saves to prevent an
 // older page request from reaching the server after a newer page request.
@@ -210,6 +233,9 @@ function isInProgress(book) { return !isFinished(book) && (book.percent || 0) > 
 
 async function saveBookProgress(book, cfi, percent) {
   progress.books[book.id] = { ...(progress.books[book.id] || {}), cfi, percent, last_opened: new Date().toISOString() };
+  // Record before sending: a write still in flight is exactly the one a backend
+  // that is a step behind will echo back at us.
+  noteOwnWrite(book.id, cfi);
   const save = async () => {
     try {
       const res = await fetch("/api/progress", {
@@ -226,13 +252,24 @@ async function saveBookProgress(book, cfi, percent) {
         if (entry) {
           progress.books[book.id] = entry;
           progressBases.set(book.id, entry.last_opened || null);
-          if (currentBook?.id === book.id) await resyncReaderTo(entry);
+          if (currentBook?.id === book.id && !isOwnWrite(book.id, entry.cfi)) await resyncReaderTo(entry);
         }
         return;
       }
-      if (res.ok && entry) {
-        progress.books[book.id] = entry;
-        progressBases.set(book.id, entry.last_opened || null);
+      if (res.ok) {
+        if (entry) {
+          progress.books[book.id] = entry;
+          progressBases.set(book.id, entry.last_opened || null);
+        } else {
+          // Accepting a write without returning the stored entry means this
+          // backend isn't running the conflict protocol — the Android shell's
+          // offline proxy queues the write and answers {ok, queued, synced}.
+          // Our token can then never be refreshed, and a token that cannot be
+          // refreshed is worse than none: it goes stale, and the real server
+          // starts rejecting every later write as a conflict that never
+          // happened. Drop it and let last-writer-wins do its job.
+          progressBases.set(book.id, null);
+        }
       }
     } catch {}
   };
@@ -262,7 +299,9 @@ async function refreshOpenReaderProgress() {
   if (tocTab === "bookmarks") renderBookmarks();
   if (!entry || !entry.last_opened) return;
   const base = progressBases.get(currentBook.id);
-  if (base && isNewerToken(entry.last_opened, base)) {
+  // A position this session wrote is not another device catching us up, however
+  // new its timestamp looks — it is our own page turn coming back around.
+  if (base && isNewerToken(entry.last_opened, base) && !isOwnWrite(currentBook.id, entry.cfi)) {
     progress.books[currentBook.id] = entry;
     progressBases.set(currentBook.id, entry.last_opened);
     await resyncReaderTo(entry);
@@ -709,6 +748,9 @@ async function openReader(book) {
     if (fresh) book = { ...book, ...fresh };
     progressBases.set(book.id, fresh ? fresh.last_opened || null : null);
   } catch { progressBases.set(book.id, null); }
+  // Last session's writes are someone else's history now: if another device has
+  // since moved to a position this one once wrote, that is a real catch-up.
+  ownWrites.delete(book.id);
   currentBook = book;
   els.reader.classList.remove("chrome-hidden");
   // Opening + parsing a book can take a few seconds; show a loading overlay so
