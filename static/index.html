@@ -38,6 +38,16 @@
     wrapper. It stays `hidden` for the web app; the wrapper injects its own
     script to reveal it when running inside the WebView.
   -->
+  <!--
+    Shown only inside the Android wrapper, which downloads a new web bundle in
+    the background but won't run it until the app is next cold-started. Without
+    this the wait is invisible and open-ended. Sits in normal flow, so the
+    full-screen reader covers it and it never interrupts reading.
+  -->
+  <div id="app-update" class="app-update hidden" role="status">
+    <span>An update is ready. Close and reopen HonLib to apply it.</span>
+    <button id="app-update-dismiss" class="btn" type="button">Later</button>
+  </div>
 
   <main>
     <section class="lib-section hidden" id="flat-section"><div id="flat-results" class="library"></div></section>

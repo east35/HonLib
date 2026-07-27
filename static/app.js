@@ -9,6 +9,7 @@ const els = {
   segAdd: $("#seg-add"), segStaging: $("#seg-staging"), paneAdd: $("#pane-add"), paneStaging: $("#pane-staging"),
   library: $("#library"), librarySection: $("#library-section"), inprogress: $("#inprogress"), inprogressSection: $("#inprogress-section"), finished: $("#finished"), finishedSection: $("#finished-section"),
   flatSection: $("#flat-section"), flatResults: $("#flat-results"),
+  appUpdate: $("#app-update"), appUpdateDismiss: $("#app-update-dismiss"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
   reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
 };
@@ -35,9 +36,15 @@ let readerView = null;
 let dictReqId = 0;
 let dictDebounce = null;
 let currentLocation = { fraction: 0, tocHref: null, cfi: null, label: "Bookmark", sectionIndex: 0, timeSection: null, timeTotal: null };
-// Per-spine-section widths of the book bar, and the segment elements built from
-// them. Rebuilt once per book (see buildProgressSegments).
+// Cumulative book fraction at each spine section boundary, straight from
+// foliate. Chapters are derived from these (see buildChapterModel); the book bar
+// segments are built from the chapters. Both are rebuilt once per book.
 let sectionFractions = [];
+// One entry per chapter: { tocItem, firstSection, lastSection, start, end },
+// where start/end are book fractions. See buildChapterModel.
+let chapters = [];
+// Whole-book reading estimate in minutes, used to derive time left in a chapter.
+let bookMinutes = 0;
 let progressSegments = [];
 let tocTab = "contents";
 let bookmarkSaving = false;
@@ -51,6 +58,29 @@ let refreshFlashTimer = null;
 // The server's `last_opened` token each book is synced to. Keeping this per book
 // lets an in-flight save finish safely even if the reader opens another book.
 const progressBases = new Map();
+// Book id -> the CFIs this session has written for it. A resync exists to catch
+// up to another device; when the position handed back is one we wrote ourselves
+// there is nothing to catch up to, and jumping to it drags the reader backwards.
+// Only writes a backend might still be echoing back can matter, and it is never
+// more than a handful behind, so this keeps a short window rather than growing
+// for the whole of a long reading session.
+const ownWrites = new Map();
+const OWN_WRITE_MEMORY = 50;
+function noteOwnWrite(bookId, cfi) {
+  if (!cfi) return;
+  let seen = ownWrites.get(bookId);
+  if (!seen) ownWrites.set(bookId, (seen = new Set()));
+  // Re-inserting moves a repeated CFI back to the end of the eviction order.
+  seen.delete(cfi);
+  seen.add(cfi);
+  for (const oldest of seen) {
+    if (seen.size <= OWN_WRITE_MEMORY) break;
+    seen.delete(oldest);
+  }
+}
+function isOwnWrite(bookId, cfi) {
+  return !!cfi && !!ownWrites.get(bookId)?.has(cfi);
+}
 // Relocate events can arrive faster than their requests complete. Event
 // listeners are not awaited by the browser, so serialize saves to prevent an
 // older page request from reaching the server after a newer page request.
@@ -204,6 +234,9 @@ function isInProgress(book) { return !isFinished(book) && (book.percent || 0) > 
 
 async function saveBookProgress(book, cfi, percent) {
   progress.books[book.id] = { ...(progress.books[book.id] || {}), cfi, percent, last_opened: new Date().toISOString() };
+  // Record before sending: a write still in flight is exactly the one a backend
+  // that is a step behind will echo back at us.
+  noteOwnWrite(book.id, cfi);
   const save = async () => {
     try {
       const res = await fetch("/api/progress", {
@@ -220,13 +253,24 @@ async function saveBookProgress(book, cfi, percent) {
         if (entry) {
           progress.books[book.id] = entry;
           progressBases.set(book.id, entry.last_opened || null);
-          if (currentBook?.id === book.id) await resyncReaderTo(entry);
+          if (currentBook?.id === book.id && !isOwnWrite(book.id, entry.cfi)) await resyncReaderTo(entry);
         }
         return;
       }
-      if (res.ok && entry) {
-        progress.books[book.id] = entry;
-        progressBases.set(book.id, entry.last_opened || null);
+      if (res.ok) {
+        if (entry) {
+          progress.books[book.id] = entry;
+          progressBases.set(book.id, entry.last_opened || null);
+        } else {
+          // Accepting a write without returning the stored entry means this
+          // backend isn't running the conflict protocol — the Android shell's
+          // offline proxy queues the write and answers {ok, queued, synced}.
+          // Our token can then never be refreshed, and a token that cannot be
+          // refreshed is worse than none: it goes stale, and the real server
+          // starts rejecting every later write as a conflict that never
+          // happened. Drop it and let last-writer-wins do its job.
+          progressBases.set(book.id, null);
+        }
       }
     } catch {}
   };
@@ -256,7 +300,9 @@ async function refreshOpenReaderProgress() {
   if (tocTab === "bookmarks") renderBookmarks();
   if (!entry || !entry.last_opened) return;
   const base = progressBases.get(currentBook.id);
-  if (base && isNewerToken(entry.last_opened, base)) {
+  // A position this session wrote is not another device catching us up, however
+  // new its timestamp looks — it is our own page turn coming back around.
+  if (base && isNewerToken(entry.last_opened, base) && !isOwnWrite(currentBook.id, entry.cfi)) {
     progress.books[currentBook.id] = entry;
     progressBases.set(currentBook.id, entry.last_opened);
     await resyncReaderTo(entry);
@@ -703,6 +749,9 @@ async function openReader(book) {
     if (fresh) book = { ...book, ...fresh };
     progressBases.set(book.id, fresh ? fresh.last_opened || null : null);
   } catch { progressBases.set(book.id, null); }
+  // Last session's writes are someone else's history now: if another device has
+  // since moved to a position this one once wrote, that is a real catch-up.
+  ownWrites.delete(book.id);
   currentBook = book;
   els.reader.classList.remove("chrome-hidden");
   // Opening + parsing a book can take a few seconds; show a loading overlay so
@@ -710,7 +759,7 @@ async function openReader(book) {
   els.readerLoading.textContent = "Loading…"; els.readerLoading.classList.remove("hidden");
   els.viewer.innerHTML = ""; els.tocList.innerHTML = ""; els.bookmarksList.innerHTML = ""; closeTocView();
   currentLocation = { fraction: 0, tocHref: null, cfi: null, label: "Bookmark", sectionIndex: 0, timeSection: null, timeTotal: null };
-  sectionFractions = []; progressSegments = [];
+  sectionFractions = []; chapters = []; bookMinutes = 0; progressSegments = [];
   if (els.readerProgressSegments) els.readerProgressSegments.innerHTML = "";
   updateBookmarkButton();
   readerView = document.createElement("foliate-view");
@@ -764,9 +813,11 @@ async function openReader(book) {
   // The TOC is available as soon as the book is parsed; render it now so it
   // never depends on layout/render timing (which is flaky on slow devices).
   els.tocList.innerHTML = renderToc(readerView.book?.toc || []);
-  // Section sizes are known once the book is parsed; build the book bar's
-  // segments now so the first relocate can paint them.
+  // Section sizes and the TOC are known once the book is parsed; group the spine
+  // into chapters and build the book bar's segments now so the first relocate
+  // can paint them.
   try { sectionFractions = readerView.getSectionFractions?.() || []; } catch { sectionFractions = []; }
+  buildChapterModel();
   buildProgressSegments();
   readerView.renderer.setAttribute("flow", "paginated");
   readerView.renderer.setAttribute("max-column-count", "1");
@@ -953,10 +1004,29 @@ function updateColumnsButton() {
   els.readerColumns.title = constrained ? "Column width: constrained" : "Column width: fill screen";
 }
 function progressEnabled() { return readerSettings.progress !== false; }
-// How far through the current chapter (spine section) we are, 0-1. foliate's
-// paginator counts pages per section with 2 blank padding pages, so the live
-// position is (page - 1) / (pages - 2) — the same maths it uses internally.
+// The chapter containing the current position, or null before the first
+// relocate. Keyed off the spine index rather than the book fraction: on the last
+// page of a section foliate's fraction includes a one-page lookahead that can
+// tip just past the chapter boundary, which would flip the bar a page early.
+function currentChapter() {
+  const index = currentLocation.sectionIndex ?? 0;
+  return chapters.find((c) => index >= c.firstSection && index <= c.lastSection) || null;
+}
+// How far through the current chapter we are, 0-1. foliate's fraction is
+// page-granular ((page - 1) / (pages - 2) within a section, plus one page of
+// lookahead) so this reaches a true 100% on the chapter's last page.
 function chapterFraction() {
+  const chapter = currentChapter();
+  if (!chapter) return sectionFraction();
+  const span = chapter.end - chapter.start;
+  if (!(span > 0)) return sectionFraction();
+  return Math.min(1, Math.max(0, ((currentLocation.fraction || 0) - chapter.start) / span));
+}
+// Fallback for books we can't group into chapters (a format foliate gives no
+// section sizes for, so buildChapterModel has nothing to work from): how far
+// through the current spine section we are. foliate's paginator counts pages per
+// section with 2 blank padding pages, so the position is (page - 1) / (pages - 2).
+function sectionFraction() {
   const r = readerView?.renderer;
   if (!r) return 0;
   // r.pages/r.page read the paginator's internal view, which is briefly
@@ -970,6 +1040,14 @@ function chapterFraction() {
     if (pages > 2) return Math.min(1, Math.max(0, (page - 1) / (pages - 2)));
     return r.atEnd ? 1 : 0;
   } catch { return 0; }
+}
+// Minutes left in the current chapter. foliate only reports this per spine
+// section, which is wrong for a chapter split across several — derive it from
+// the chapter's remaining share of the book instead.
+function chapterTimeLeft() {
+  const chapter = currentChapter();
+  if (!chapter || !bookMinutes) return currentLocation.timeSection;
+  return Math.max(0, chapter.end - (currentLocation.fraction || 0)) * bookMinutes;
 }
 function progressModeIndex() {
   const raw = Math.round(Number(readerSettings.progressMode) || 0);
@@ -998,19 +1076,70 @@ function progressLabelText(mode) {
     return `${Math.round(fraction * 100)}%`;
   }
   if (mode.label !== "time") return "";
-  const time = formatTimeLeft(chapter ? currentLocation.timeSection : currentLocation.timeTotal);
+  const time = formatTimeLeft(chapter ? chapterTimeLeft() : currentLocation.timeTotal);
   return time ? `${time} left in ${chapter ? "chapter" : "book"}` : "";
 }
-// The book bar is one segment per spine section, sized by that section's share
-// of the book — so a chapter twice as long as its neighbours is twice as wide.
-// Sections foliate gives no size (non-linear front/back matter) are skipped.
+// foliate's `sizePerTimeUnit` — the chars/minute it assumes when estimating how
+// long a section takes to read (view.js passes 1600 when it builds
+// SectionProgress). Mirrored here so per-chapter estimates match per-book ones.
+const FOLIATE_CHARS_PER_MINUTE = 1600;
+// Group the spine into chapters. A chapter is a run of consecutive spine
+// sections that the TOC assigns to the same entry: publishers routinely split
+// one long chapter across several spine files and give only the first a TOC
+// entry (Seveneves' "Ymir" is Chapter_10.xhtml + Chapter_10a.xhtml). Treating
+// each spine section as its own chapter made the chapter bar restart at 0%
+// partway through such a chapter, and painted a book-bar segment that the
+// contents view had no entry for and so could never navigate back to.
+//
+// foliate already resolves the owning TOC entry per section — including filling
+// the gap for a continuation file — so ask it rather than re-deriving hrefs.
+function buildChapterModel() {
+  chapters = [];
+  bookMinutes = 0;
+  const sections = readerView?.book?.sections || [];
+  if (!sections.length || sectionFractions.length !== sections.length + 1) return;
+  // Non-linear sections (cover, nav) are sized 0 by foliate and so contribute
+  // no reading time; mirror that here rather than counting them.
+  const sizes = sections.map((s) => (s.linear !== "no" && s.size > 0 ? s.size : 0));
+  bookMinutes = sizes.reduce((a, b) => a + b, 0) / FOLIATE_CHARS_PER_MINUTE;
+  const owners = sections.map((_, i) => {
+    // No range argument: this asks which TOC entry owns the *start* of the
+    // section, which is what defines a chapter boundary.
+    try { return readerView.getProgressOf(i)?.tocItem || null; } catch { return null; }
+  });
+  // Formats with no TOC (or none foliate can map to the spine) give every
+  // section a null owner, which would collapse the whole book into one chapter.
+  // Fall back to one chapter per spine section — the previous behaviour.
+  const grouped = owners.some(Boolean);
+  for (let i = 0; i < sections.length; i++) {
+    const last = chapters[chapters.length - 1];
+    // Sections with no owner at all only occur ahead of the first TOC entry
+    // (foliate's gap-filling covers everything after it), so merging them keeps
+    // unnavigable front matter as one block instead of several stray segments.
+    if (grouped && last && last.tocItem === owners[i]) {
+      last.lastSection = i;
+      last.end = sectionFractions[i + 1];
+      continue;
+    }
+    chapters.push({
+      tocItem: owners[i],
+      firstSection: i,
+      lastSection: i,
+      start: sectionFractions[i],
+      end: sectionFractions[i + 1],
+    });
+  }
+}
+// The book bar is one segment per chapter, sized by that chapter's share of the
+// book — so a chapter twice as long as its neighbours is twice as wide.
+// Chapters foliate gives no size (non-linear front/back matter) are skipped.
 function buildProgressSegments() {
   progressSegments = [];
   if (!els.readerProgressSegments) return;
   els.readerProgressSegments.innerHTML = "";
   const frag = document.createDocumentFragment();
-  for (let i = 0; i < sectionFractions.length - 1; i++) {
-    const share = sectionFractions[i + 1] - sectionFractions[i];
+  for (const [index, chapter] of chapters.entries()) {
+    const share = chapter.end - chapter.start;
     if (!(share > 0)) continue;
     const seg = document.createElement("div");
     seg.className = "reader-progress-seg";
@@ -1019,12 +1148,12 @@ function buildProgressSegments() {
     fill.className = "reader-progress-fill";
     seg.appendChild(fill);
     frag.appendChild(seg);
-    progressSegments.push({ index: i, fill });
+    progressSegments.push({ index, fill });
   }
   els.readerProgressSegments.appendChild(frag);
 }
 function paintProgressSegments() {
-  const current = currentLocation.sectionIndex ?? 0;
+  const current = chapters.indexOf(currentChapter());
   const within = chapterFraction() * 100;
   for (const { index, fill } of progressSegments) {
     const pct = index < current ? 100 : index > current ? 0 : within;
@@ -1575,12 +1704,47 @@ async function loadIrcStatus() {
     els.openDownload.title = "Add books — IRC status unknown";
   }
 }
+// ---- Update notice -------------------------------------------------------
+// The Android shell downloads a new web bundle in the background but only swaps
+// it in at a cold start, so a device can keep running known-broken code for days
+// with nothing to show a fix is already waiting. Compare the build stamped into
+// the bundle we were served with the one the server is offering, and if they
+// differ, say so — restarting the app is the whole fix, but only if the reader
+// knows to do it.
+//
+// build-id.json exists only inside a built bundle; in a browser this 404s and
+// the notice never appears, which is right — a reload there is already enough.
+const UPDATE_DISMISSED_KEY = "ebook-library.updateDismissed";
+
+async function checkForAppUpdate() {
+  let running, offered;
+  try {
+    const stamp = await fetch("/build-id.json", { cache: "no-store" });
+    if (!stamp.ok) return;
+    running = (await stamp.json()).buildId;
+    const manifest = await fetch("/api/app-bundle/manifest", { cache: "no-store" });
+    if (!manifest.ok) return;
+    offered = (await manifest.json()).buildId;
+  } catch { return; }
+  if (!running || !offered || running === offered) return;
+  // Dismissal is per-build, so declining one update never suppresses the next.
+  if (localStorage.getItem(UPDATE_DISMISSED_KEY) === offered) return;
+  els.appUpdate?.classList.remove("hidden");
+  if (els.appUpdateDismiss) {
+    els.appUpdateDismiss.onclick = () => {
+      try { localStorage.setItem(UPDATE_DISMISSED_KEY, offered); } catch {}
+      els.appUpdate.classList.add("hidden");
+    };
+  }
+}
+
 setTheme(localStorage.getItem("ebook-library.theme") || "system");
 populateFontSelect();
 updateLibControls();
 applyReaderTheme();
 loadIrcStatus().then(loadStaging);
 loadLibrary();
+checkForAppUpdate();
 
 // Register the service worker so the app is installable as a PWA.
 if ("serviceWorker" in navigator) {
