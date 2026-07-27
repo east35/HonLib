@@ -28,8 +28,31 @@ class WebBundleBuildTests(unittest.TestCase):
             self.assertEqual(first_zip, second_zip)
             self.assertEqual(hashlib.sha256(first_zip).hexdigest(), first["sha256"])
             with zipfile.ZipFile(root / "one" / f"{first['bundleVersion']}.zip") as archive:
-                self.assertEqual(archive.namelist(), ["index.html", "js/app.js"])
-            self.assertEqual(first["uncompressedSizeBytes"], 8)
+                self.assertEqual(archive.namelist(), ["build-id.json", "index.html", "js/app.js"])
+                stamp_bytes = archive.read("build-id.json")
+            # The stamp the app reads and the one it compares against must agree,
+            # or the update notice either never fires or fires forever.
+            self.assertEqual(json.loads(stamp_bytes)["buildId"], first["buildId"])
+            self.assertEqual(first["uncompressedSizeBytes"], 8 + len(stamp_bytes))
+
+    def test_build_id_tracks_content_not_the_archive(self):
+        """The stamp must change when any file changes and hold still otherwise —
+        it is the only thing telling a device it is running stale code."""
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            static = root / "static"
+            static.mkdir(parents=True)
+            (static / "index.html").write_text("hello", encoding="utf-8")
+            before = web_bundle.build_bundle(static, root / "one")
+            unchanged = web_bundle.build_bundle(static, root / "two")
+            (static / "index.html").write_text("goodbye", encoding="utf-8")
+            after = web_bundle.build_bundle(static, root / "three")
+
+            self.assertEqual(before["buildId"], unchanged["buildId"])
+            self.assertNotEqual(before["buildId"], after["buildId"])
+            # A stamp equal to the archive hash would be unusable: the archive
+            # contains the stamp, so the app could never carry its own version.
+            self.assertNotEqual(before["buildId"], before["bundleVersion"])
 
 
 class WebBundleRouteTests(unittest.TestCase):

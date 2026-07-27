@@ -9,6 +9,7 @@ const els = {
   segAdd: $("#seg-add"), segStaging: $("#seg-staging"), paneAdd: $("#pane-add"), paneStaging: $("#pane-staging"),
   library: $("#library"), librarySection: $("#library-section"), inprogress: $("#inprogress"), inprogressSection: $("#inprogress-section"), finished: $("#finished"), finishedSection: $("#finished-section"),
   flatSection: $("#flat-section"), flatResults: $("#flat-results"),
+  appUpdate: $("#app-update"), appUpdateDismiss: $("#app-update-dismiss"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
   reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
 };
@@ -1703,12 +1704,47 @@ async function loadIrcStatus() {
     els.openDownload.title = "Add books — IRC status unknown";
   }
 }
+// ---- Update notice -------------------------------------------------------
+// The Android shell downloads a new web bundle in the background but only swaps
+// it in at a cold start, so a device can keep running known-broken code for days
+// with nothing to show a fix is already waiting. Compare the build stamped into
+// the bundle we were served with the one the server is offering, and if they
+// differ, say so — restarting the app is the whole fix, but only if the reader
+// knows to do it.
+//
+// build-id.json exists only inside a built bundle; in a browser this 404s and
+// the notice never appears, which is right — a reload there is already enough.
+const UPDATE_DISMISSED_KEY = "ebook-library.updateDismissed";
+
+async function checkForAppUpdate() {
+  let running, offered;
+  try {
+    const stamp = await fetch("/build-id.json", { cache: "no-store" });
+    if (!stamp.ok) return;
+    running = (await stamp.json()).buildId;
+    const manifest = await fetch("/api/app-bundle/manifest", { cache: "no-store" });
+    if (!manifest.ok) return;
+    offered = (await manifest.json()).buildId;
+  } catch { return; }
+  if (!running || !offered || running === offered) return;
+  // Dismissal is per-build, so declining one update never suppresses the next.
+  if (localStorage.getItem(UPDATE_DISMISSED_KEY) === offered) return;
+  els.appUpdate?.classList.remove("hidden");
+  if (els.appUpdateDismiss) {
+    els.appUpdateDismiss.onclick = () => {
+      try { localStorage.setItem(UPDATE_DISMISSED_KEY, offered); } catch {}
+      els.appUpdate.classList.add("hidden");
+    };
+  }
+}
+
 setTheme(localStorage.getItem("ebook-library.theme") || "system");
 populateFontSelect();
 updateLibControls();
 applyReaderTheme();
 loadIrcStatus().then(loadStaging);
 loadLibrary();
+checkForAppUpdate();
 
 // Register the service worker so the app is installable as a PWA.
 if ("serviceWorker" in navigator) {

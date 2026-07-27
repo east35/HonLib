@@ -94,3 +94,9 @@
 .reader[data-reader-theme="dark"] .toc-segmented button.active{background:#fff;color:#000}
 .reader[data-reader-theme="dark"] .bookmark-toggle svg{fill:#000;stroke:#fff}
 .reader[data-reader-theme="dark"] .bookmark-toggle.active svg{fill:#fff}
+
+/* Update notice. Inverted so it reads as a system message rather than another
+   library control, and full-bleed like .lib-section so it can't be mistaken for
+   part of the book grid. */
+.app-update{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:14px 24px;background:var(--bg-inv);color:var(--fg-inv);font-size:15px;font-weight:700}
+.app-update .btn{background:var(--bg-inv);color:var(--fg-inv);border-color:var(--fg-inv);flex:0 0 auto}
