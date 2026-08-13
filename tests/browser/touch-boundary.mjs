@@ -8,6 +8,14 @@ import { goToSectionEnd, openBook, readState, settled } from "./reader-harness.m
 
 const BOOK = "HonLib Split Chapter Test";
 
+// This regression models Android WebView with Chromium's touch/CDP APIs. The
+// CI matrix installs one browser per job, so the WebKit job must not try to
+// launch a Chromium executable it deliberately did not install.
+if (process.env.HONLIB_BROWSER && process.env.HONLIB_BROWSER !== "chromium") {
+  console.log(`${process.env.HONLIB_BROWSER}: touchscreen boundary regression covered by chromium`);
+  process.exit(0);
+}
+
 const browser = await chromium.launch({ headless: true });
 try {
   const context = await browser.newContext({
