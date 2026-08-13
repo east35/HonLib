@@ -1448,6 +1448,35 @@ els.readerProgressCycle.addEventListener("keydown", (e) => {
 // drag anywhere over the text — including under the prev/next zones — is a
 // selection gesture and triggers the word lookup instead.
 function wireReaderInput(doc) {
+  // A stationary touchscreen gesture is a HonLib page tap, not a Foliate
+  // swipe. Foliate's paginator also observes this document's touchend and
+  // calls snap(); on the final page that starts its own section transition in
+  // parallel with the pointerup turn below. Stop only stationary touchends
+  // before they reach Foliate. Moved and multi-touch gestures remain available
+  // to the renderer.
+  let touchX = 0, touchY = 0, touchMoved = false, touchTracking = false;
+  doc.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) { touchTracking = false; return; }
+    const touch = e.changedTouches[0];
+    touchTracking = !!touch;
+    touchMoved = false;
+    touchX = touch?.clientX || 0;
+    touchY = touch?.clientY || 0;
+  }, true);
+  doc.addEventListener("touchmove", (e) => {
+    if (!touchTracking) return;
+    const touch = e.changedTouches[0];
+    if (!touch || Math.abs(touch.clientX - touchX) > 12 || Math.abs(touch.clientY - touchY) > 12) {
+      touchMoved = true;
+    }
+  }, true);
+  doc.addEventListener("touchcancel", () => { touchTracking = false; }, true);
+  doc.addEventListener("touchend", (e) => {
+    if (!touchTracking) return;
+    touchTracking = false;
+    if (!touchMoved) e.stopImmediatePropagation();
+  }, true);
+
   let sx = 0, sy = 0, st = 0, moved = false, tracking = false;
   doc.addEventListener("pointerdown", (e) => {
     if (!e.isPrimary) return;
