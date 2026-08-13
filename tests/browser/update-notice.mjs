@@ -47,6 +47,10 @@ async function runEngine(name, engine) {
   const browser = await engine.launch({ headless: true });
   try {
     const context = await browser.newContext({ serviceWorkers: "block" });
+    await context.addInitScript(() => {
+      window.__readerShellApplyCalls = 0;
+      window.__readerShellApplyUpdate = () => { window.__readerShellApplyCalls += 1; };
+    });
     const state = await installBuildIds(context, { running: "build-a", offered: "build-a" });
 
     // Up to date: nothing to say.
@@ -58,6 +62,16 @@ async function runEngine(name, engine) {
     state.offered = "build-b";
     seen = await loadAndCheck(context);
     assert.equal(seen.visible, true, `${name}: never told the reader an update was waiting`);
+    assert.equal(await seen.page.locator("#app-update-apply").isVisible(), true, `${name}: apply action missing in a capable shell`);
+    await seen.page.locator("#app-update-apply").click();
+    assert.equal(
+      await seen.page.evaluate(() => window.__readerShellApplyCalls),
+      1,
+      `${name}: apply action did not call the Android shell`,
+    );
+    assert.equal(await seen.page.locator("#app-update-apply").isDisabled(), true, `${name}: apply action allowed duplicate requests`);
+    await seen.page.evaluate(() => window.dispatchEvent(new Event("hon-reader-update-failed")));
+    assert.equal(await seen.page.locator("#app-update-apply").isEnabled(), true, `${name}: failed apply could not be retried`);
 
     // Deferring hides it, and it stays hidden for that build across restarts —
     // a prompt that reappears every launch just gets ignored.
@@ -79,6 +93,21 @@ async function runEngine(name, engine) {
     await seen.page.close();
     await context.close();
 
+    // A bundle can still run in an older shell. It keeps accurate cold-start
+    // instructions and never exposes an action that shell cannot service.
+    const legacyCtx = await browser.newContext({ serviceWorkers: "block" });
+    await installBuildIds(legacyCtx, { running: "build-a", offered: "build-b" });
+    seen = await loadAndCheck(legacyCtx);
+    assert.equal(seen.visible, true, `${name}: legacy shell lost the update notice`);
+    assert.equal(await seen.page.locator("#app-update-apply").isVisible(), false, `${name}: legacy shell received an unsupported apply action`);
+    assert.match(
+      await seen.page.locator("#app-update-message").textContent(),
+      /recent apps/,
+      `${name}: legacy shell did not receive accurate restart instructions`,
+    );
+    await seen.page.close();
+    await legacyCtx.close();
+
     // A plain browser has no bundle and no restart to perform, so it is never
     // asked to do one — a reload there already gets the latest code.
     const browserCtx = await browser.newContext({ serviceWorkers: "block" });
@@ -88,7 +117,7 @@ async function runEngine(name, engine) {
     await seen.page.close();
     await browserCtx.close();
 
-    console.log(`${name}: restart prompt appears only for a stale bundle, and only once per build`);
+    console.log(`${name}: stale bundle offers immediate apply with a legacy-shell fallback`);
   } finally {
     await browser.close();
   }
