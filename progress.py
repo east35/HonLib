@@ -87,6 +87,17 @@ def reset_book_progress(book_id):
         return existed
 
 
+def delete_book_data(book_id):
+    """Remove all persisted reader state for a book that left the library."""
+    with _lock:
+        data = load_progress()
+        removed_progress = data["books"].pop(book_id, None) is not None
+        removed_bookmarks = data.setdefault("bookmarks", {}).pop(book_id, None) is not None
+        if removed_progress or removed_bookmarks:
+            save_progress(data)
+        return removed_progress or removed_bookmarks
+
+
 def update_bookmark(book_id, *, cfi, add, percent=None, label=None):
     """Atomically add or remove a CFI bookmark and return the book's list."""
     cfi = str(cfi or "").strip()

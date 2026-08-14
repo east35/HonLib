@@ -4,11 +4,12 @@
   "scripts": {
     "test:scripted-epub": "bash scripts/test-scripted-epub.sh",
     "test:scripted-epub:browser": "node tests/browser/scripted-epub.mjs",
-    "test:reader": "bash scripts/test-reader.sh chapter-progress.mjs touch-boundary.mjs sdk-proxy-progress.mjs shell-contract.mjs update-notice.mjs",
+    "test:reader": "bash scripts/test-reader.sh chapter-progress.mjs touch-boundary.mjs sdk-proxy-progress.mjs shell-contract.mjs update-notice.mjs book-actions.mjs",
     "test:chapter-progress": "bash scripts/test-reader.sh chapter-progress.mjs touch-boundary.mjs",
     "test:sdk-proxy-progress": "bash scripts/test-reader.sh sdk-proxy-progress.mjs",
     "test:shell-contract": "bash scripts/test-reader.sh shell-contract.mjs",
-    "test:update-notice": "bash scripts/test-reader.sh update-notice.mjs"
+    "test:update-notice": "bash scripts/test-reader.sh update-notice.mjs",
+    "test:book-actions": "bash scripts/test-reader.sh book-actions.mjs"
   },
   "devDependencies": {
     "playwright": "1.58.2"

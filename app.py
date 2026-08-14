@@ -769,6 +769,42 @@ def refresh_library():
     return jsonify({"folder": current_library_folder(), "books": books, "groups": library.group_books(books)})
 
 
+@app.route("/api/book/<book_id>/delete", methods=["POST"])
+def delete_book(book_id):
+    # Requiring JSON keeps a destructive cookie-authenticated endpoint from
+    # being callable by a cross-site HTML form. The app sends an empty object.
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "JSON request required"}), 415
+    try:
+        path, book = _book_path_by_id(book_id)
+    except (FileNotFoundError, ValueError):
+        return jsonify({"ok": False, "error": "Book not found"}), 404
+    try:
+        # Delete in place. In particular, do not move the EPUB through staging:
+        # the staging importer would see it as a new download and add it again.
+        path.unlink()
+    except FileNotFoundError:
+        library.refresh_library(current_library_folder())
+        return jsonify({"ok": False, "error": "Book not found"}), 404
+    except OSError as e:
+        return jsonify({"ok": False, "error": f"Could not delete book: {e.strerror or str(e)}"}), 500
+
+    progress.delete_book_data(book_id)
+    books = library.refresh_library(current_library_folder())
+    prog = progress.load_progress().get("books", {})
+    for remaining in books:
+        saved = prog.get(remaining["id"], {})
+        remaining["percent"] = float(saved.get("percent") or 0)
+        remaining["last_opened"] = saved.get("last_opened")
+    return jsonify({
+        "ok": True,
+        "deleted": {"id": book_id, "title": book.get("title") or path.stem},
+        "folder": current_library_folder(),
+        "books": books,
+        "groups": library.group_books(books),
+    })
+
+
 @app.route("/api/book/<book_id>/file")
 def book_file(book_id):
     path, _ = _book_path_by_id(book_id)

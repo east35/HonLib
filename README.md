@@ -72,7 +72,8 @@ reader behavior consistent.
 
 ## Features
 
-- **Library** — cover grid or table view, search, sort, and filter your epubs.
+- **Library** — cover grid or table view, search, sort, filter, and permanently
+  delete unwanted EPUBs without visiting the NAS filesystem.
 - **Reader** — paginated reading with adjustable fonts (incl. dyslexia-friendly
   faces like Atkinson Hyperlegible), light/sepia/dark themes
   tuned for e-ink, and tap-a-word dictionary lookups.
