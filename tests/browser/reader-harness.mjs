@@ -44,6 +44,8 @@ export async function settled(page) {
 export async function openBook(page, title) {
   await page.goto(baseURL, { waitUntil: "networkidle" });
   await page.locator(`#library .series-card[title="${title}"]`).click();
+  await page.locator("#book-actions-modal").waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "Read", exact: true }).click();
   await page.locator("#reader-loading").waitFor({ state: "hidden" });
   await page.waitForFunction(() => {
     try { return document.querySelector("foliate-view")?.renderer?.pages > 0; } catch { return false; }

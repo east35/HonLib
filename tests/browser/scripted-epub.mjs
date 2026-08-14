@@ -18,6 +18,8 @@ async function openProbe(page) {
     });
   });
   await page.locator('#library .series-card[title="HonLib Scripted EPUB Security Test"]').click();
+  await page.locator("#book-actions-modal").waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "Read", exact: true }).click();
   await page.waitForFunction(() => {
     const view = document.querySelector("foliate-view");
     const doc = view?.renderer?.getContents?.()[0]?.doc;
