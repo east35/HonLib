@@ -12,6 +12,6 @@
     "test:book-actions": "bash scripts/test-reader.sh book-actions.mjs"
   },
   "devDependencies": {
-    "playwright": "1.58.2"
+    "playwright": "1.62.1"
   }
 }
