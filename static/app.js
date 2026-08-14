@@ -11,6 +11,7 @@ const els = {
   flatSection: $("#flat-section"), flatResults: $("#flat-results"),
   appUpdate: $("#app-update"), appUpdateMessage: $("#app-update-message"), appUpdateApply: $("#app-update-apply"), appUpdateDismiss: $("#app-update-dismiss"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
+  bookActionsModal: $("#book-actions-modal"), bookActionsTitle: $("#book-actions-title"), bookActionReset: $("#book-action-reset"), bookActionDelete: $("#book-action-delete"),
   reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
 };
 
@@ -30,6 +31,7 @@ if (libView.dir !== "desc") libView.dir = "asc";
 let libSearch = "";
 let libFilter = { author: "", group: "" };
 let currentBook = null;
+let bookActionsBook = null;
 let readerView = null;
 // Dictionary popover state: `dictReqId` invalidates stale async lookups,
 // `dictDebounce` coalesces the rapid selectionchange events of a drag-select.
@@ -439,17 +441,18 @@ function renderTableRow(b, kind) {
   const tr = document.createElement("tr");
   tr.className = "book-row";
   const cover = b.cover_url ? `<img class="row-cover" src="${b.cover_url}" alt="" loading="lazy" decoding="async">` : `<div class="row-cover row-cover-ph">${escapeHtml(initials(b.title))}</div>`;
-  let status = "", reset = "";
+  let status = "";
   if (kind === "inprogress") status = fmtPercent(b.percent);
   else if (kind === "complete") status = "Finished";
-  if (kind !== "library") reset = `<button class="reset-btn" data-reset title="Reset progress" aria-label="Reset progress">${RESET_ICON}</button>`;
   tr.innerHTML = `<td class="c-cover">${cover}</td>` +
     `<td class="c-title"><span class="row-title">${escapeHtml(b.title)}</span></td>` +
     `<td class="c-author">${escapeHtml(b.author || "")}</td>` +
-    `<td class="c-status"><span class="row-status">${escapeHtml(status)}</span>${reset}</td>`;
+    `<td class="c-status"><span class="row-status">${escapeHtml(status)}</span>${bookActionsButton(b, "row-menu")}</td>`;
   tr.addEventListener("click", () => openReader(b));
-  const rb = tr.querySelector("[data-reset]");
-  if (rb) rb.addEventListener("click", (e) => { e.stopPropagation(); resetProgress(b); });
+  tr.querySelector("[data-book-actions]").addEventListener("click", (e) => {
+    e.stopPropagation();
+    openBookActions(b);
+  });
   return tr;
 }
 
@@ -530,36 +533,99 @@ function populateFontSelect() {
 }
 function saveLibView() { localStorage.setItem("ebook-library.libview", JSON.stringify({ view: libView.view, sort: libView.sort, dir: libView.dir })); }
 
-const RESET_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>';
-function resumeStrip(label, iso) {
+const MORE_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>';
+function bookActionsButton(book, extraClass = "") {
+  return `<button type="button" class="book-menu-btn ${extraClass}" data-book-actions title="Book options" aria-label="Options for ${escapeHtml(book.title)}">${MORE_ICON}</button>`;
+}
+function resumeStrip(label, iso, book) {
   const date = fmtDate(iso);
   return `<div class="resume-strip"><span>${escapeHtml(label)}${date ? ` · ${escapeHtml(date)}` : ""}</span>` +
-    `<button class="reset-btn" data-reset title="Reset progress" aria-label="Reset progress">${RESET_ICON}</button></div>`;
+    `${bookActionsButton(book, "strip-menu")}</div>`;
 }
 function renderCard(b, kind) {
   const card = document.createElement("div");
   card.className = "series-card";
   const cover = b.cover_url ? `<img class="cover" src="${b.cover_url}" alt="" loading="lazy" decoding="async">` : `<div class="cover-placeholder">${escapeHtml(initials(b.title))}</div>`;
   let strip = "";
-  if (kind === "inprogress") strip = resumeStrip(fmtPercent(b.percent), b.last_opened);
-  else if (kind === "complete") strip = resumeStrip("Finished", b.last_opened);
-  card.innerHTML = `${cover}${strip}`;
+  if (kind === "inprogress") strip = resumeStrip(fmtPercent(b.percent), b.last_opened, b);
+  else if (kind === "complete") strip = resumeStrip("Finished", b.last_opened, b);
+  card.innerHTML = `${cover}${strip || bookActionsButton(b, "card-menu")}`;
   card.title = b.title;
   card.addEventListener("click", () => openReader(b));
-  const resetBtn = card.querySelector("[data-reset]");
-  if (resetBtn) resetBtn.addEventListener("click", (e) => { e.stopPropagation(); resetProgress(b); });
+  card.querySelector("[data-book-actions]").addEventListener("click", (e) => {
+    e.stopPropagation();
+    openBookActions(b);
+  });
   return card;
 }
 async function resetProgress(book) {
-  if (!confirm(`Reset reading progress for "${book.title}"?`)) return;
+  if (!confirm(`Reset reading progress for "${book.title}"?`)) return false;
   try {
     await api("/api/progress/reset", { method: "POST", body: JSON.stringify({ book_id: book.id }) });
-  } catch (e) { alert("Couldn't reset progress: " + e.message); return; }
+  } catch (e) { alert("Couldn't reset progress: " + e.message); return false; }
   await loadLibrary();
+  return true;
+}
+
+async function deleteBook(book, button) {
+  if (!confirm(`Permanently delete "${book.title}" from HonLib?\n\nThis removes the EPUB from library storage and can't be undone.`)) return false;
+  button.disabled = true;
+  try {
+    let res = await api(`/api/book/${encodeURIComponent(book.id)}/delete`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    delete progress.books[book.id];
+    delete progress.bookmarks[book.id];
+    progressBases.delete(book.id);
+    ownWrites.delete(book.id);
+    // The Android shell caches GET /api/library for offline startup. Re-reading
+    // it after deletion updates that cache so the removed book cannot reappear
+    // from stale metadata the next time the device starts without a network.
+    try { res = await api("/api/library"); } catch {}
+    setLibraryData(res);
+    renderSections();
+    return true;
+  } catch (e) {
+    alert("Couldn't delete book: " + e.message);
+    button.disabled = false;
+    return false;
+  }
 }
 
 function openModal(el, focusEl) { el.classList.remove("hidden"); if (focusEl) focusEl.focus(); }
 function closeModal(el) { el.classList.add("hidden"); }
+
+function openBookActions(book) {
+  bookActionsBook = book;
+  els.bookActionsTitle.textContent = book.title;
+  els.bookActionReset.disabled = false;
+  els.bookActionDelete.disabled = false;
+  openModal(els.bookActionsModal, els.bookActionReset);
+}
+function closeBookActions() {
+  closeModal(els.bookActionsModal);
+  bookActionsBook = null;
+}
+els.bookActionsModal.addEventListener("click", (e) => {
+  if (e.target === els.bookActionsModal || e.target.hasAttribute("data-close-book-actions")) closeBookActions();
+});
+els.bookActionReset.addEventListener("click", async () => {
+  const book = bookActionsBook;
+  if (!book) return;
+  els.bookActionReset.disabled = true;
+  const done = await resetProgress(book);
+  els.bookActionReset.disabled = false;
+  if (done) closeBookActions();
+});
+els.bookActionDelete.addEventListener("click", async () => {
+  const book = bookActionsBook;
+  if (!book) return;
+  if (await deleteBook(book, els.bookActionDelete)) closeBookActions();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !els.bookActionsModal.classList.contains("hidden")) closeBookActions();
+});
 
 function appendLog(el, line) { el.textContent += (el.textContent ? "\n" : "") + line; el.scrollTop = el.scrollHeight; }
 function finishJob() { if (pollTimer) clearTimeout(pollTimer); pollTimer = null; currentJob = null; }
