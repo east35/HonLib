@@ -1,5 +1,5 @@
-// Per-book maintenance lives behind one ellipsis menu. This exercises both
-// options against the real backend and verifies deletion never feeds staging.
+// Progressed books keep maintenance behind an ellipsis menu. Unread covers
+// open Read/Remove choices directly, and removal must never feed staging.
 import assert from "node:assert/strict";
 import { chromium, webkit } from "playwright";
 import { baseURL } from "./reader-harness.mjs";
@@ -47,9 +47,34 @@ try {
   const afterReset = await fetch(`${baseURL}/api/progress`).then((r) => r.json());
   assert.equal(afterReset.books[book.id], undefined, "reset option kept reading progress");
 
+  await page.evaluate(() => localStorage.setItem("ebook-library.libview", JSON.stringify({ view: "table", sort: "series", dir: "asc" })));
+  await page.reload({ waitUntil: "networkidle" });
+  const libraryRow = page.locator("#library .book-row");
+  assert.equal(await libraryRow.count(), 1, "unread book missing from table view");
+  assert.equal(await libraryRow.locator("[data-book-actions]").count(), 1, "table overflow button was removed");
+  await libraryRow.locator("[data-book-actions]").click();
+  assert.deepEqual(
+    await modal.locator(".book-actions-body button").allTextContents(),
+    ["Reset progress", "Delete book"],
+    "table book options changed",
+  );
+  await modal.locator("[data-close-book-actions]").click();
+
+  await page.evaluate(() => localStorage.setItem("ebook-library.libview", JSON.stringify({ view: "cover", sort: "series", dir: "asc" })));
+  await page.reload({ waitUntil: "networkidle" });
   const libraryCard = page.locator("#library .series-card");
   assert.equal(await libraryCard.count(), 1, "reset book did not return to the library");
-  await libraryCard.locator("[data-book-actions]").click();
+  assert.equal(
+    await libraryCard.locator("[data-book-actions]").count(),
+    0,
+    "unread cover still has an overflow button",
+  );
+  await libraryCard.click();
+  assert.deepEqual(
+    await modal.locator(".book-actions-body button").allTextContents(),
+    ["Read", "Remove"],
+    "unread cover choices changed",
+  );
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#book-action-delete").click();
   await page.locator("#library .lib-empty").waitFor({ state: "visible" });

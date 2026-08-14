@@ -74,14 +74,13 @@
 .as-table{display:block}.book-table{width:100%;border-collapse:collapse;table-layout:fixed}.book-row{cursor:pointer;border-top:2px solid var(--fg)}.book-table tbody tr:first-child{border-top:0}.book-row td{padding:8px 10px;vertical-align:middle}.book-row .c-cover{width:46px}.row-cover{width:36px;height:54px;object-fit:cover;display:block;background:var(--bg)}.row-cover-ph{display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;border:1px solid currentColor}.c-title{font-weight:700}.row-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.c-author{font-size:14px;opacity:.85;width:28%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.c-status{text-align:right;white-space:nowrap;width:160px}.c-status .row-status{display:inline-block;max-width:74px;font-weight:800;font-size:13px;margin-right:6px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}.row-actions{display:inline-flex;align-items:center;gap:8px;vertical-align:middle}.c-status .reset-btn{vertical-align:middle}.book-row:hover .row-title{text-decoration:underline}
 @media(max-width:640px){.topbar{padding:12px}.topbar-actions{width:100%}#search{max-width:none;flex:1}.library{grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:14px}.lib-section{padding:16px}.reader-controls{gap:4px}.reader-controls .btn{height:42px}.reader-controls .icon-btn{width:38px;flex:0 0 auto}.reader-controls .size-toggle{width:100px;height:42px}.reader-refresh-panel{padding:12px 14px}.hit{top:0}.irc-result{align-items:flex-start}.irc-result .btn{padding:8px 10px}.staging-grid{grid-template-columns:1fr}.c-author{display:none}}
 
-/* One consistent per-book entry point. Progressed cards place the ellipsis in
-   their status strip; unread cards use the same control over the cover. */
+/* Progressed cover cards place their maintenance menu in the status strip.
+   Unread covers stay unobstructed and open their choices when tapped. */
 .book-menu-btn{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:7px;background:var(--bg);color:var(--fg);border:2px solid var(--fg);cursor:pointer}
 .book-menu-btn svg{display:block;width:20px;height:20px}
 .book-menu-btn:hover{background:var(--fg);color:var(--bg)}
 .strip-menu{width:28px;height:28px;margin:-4px;padding:4px;background:transparent;color:inherit;border:0}
 .strip-menu:hover{background:transparent;color:inherit;opacity:.6}
-.card-menu{position:absolute;top:8px;right:8px;z-index:2;width:44px;height:44px;box-shadow:0 0 0 2px var(--bg)}
 .row-menu{vertical-align:middle}
 .c-status{width:130px}
 .book-actions-card{width:min(420px,100%)}

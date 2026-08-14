@@ -32,6 +32,7 @@ let libSearch = "";
 let libFilter = { author: "", group: "" };
 let currentBook = null;
 let bookActionsBook = null;
+let bookActionsMode = "maintenance";
 let readerView = null;
 // Dictionary popover state: `dictReqId` invalidates stale async lookups,
 // `dictDebounce` coalesces the rapid selectionchange events of a drag-select.
@@ -549,10 +550,10 @@ function renderCard(b, kind) {
   let strip = "";
   if (kind === "inprogress") strip = resumeStrip(fmtPercent(b.percent), b.last_opened, b);
   else if (kind === "complete") strip = resumeStrip("Finished", b.last_opened, b);
-  card.innerHTML = `${cover}${strip || bookActionsButton(b, "card-menu")}`;
+  card.innerHTML = `${cover}${strip}`;
   card.title = b.title;
-  card.addEventListener("click", () => openReader(b));
-  card.querySelector("[data-book-actions]").addEventListener("click", (e) => {
+  card.addEventListener("click", () => kind === "library" ? openBookActions(b, "unread") : openReader(b));
+  card.querySelector("[data-book-actions]")?.addEventListener("click", (e) => {
     e.stopPropagation();
     openBookActions(b);
   });
@@ -596,9 +597,12 @@ async function deleteBook(book, button) {
 function openModal(el, focusEl) { el.classList.remove("hidden"); if (focusEl) focusEl.focus(); }
 function closeModal(el) { el.classList.add("hidden"); }
 
-function openBookActions(book) {
+function openBookActions(book, mode = "maintenance") {
   bookActionsBook = book;
+  bookActionsMode = mode;
   els.bookActionsTitle.textContent = book.title;
+  els.bookActionReset.textContent = mode === "unread" ? "Read" : "Reset progress";
+  els.bookActionDelete.textContent = mode === "unread" ? "Remove" : "Delete book";
   els.bookActionReset.disabled = false;
   els.bookActionDelete.disabled = false;
   openModal(els.bookActionsModal, els.bookActionReset);
@@ -606,6 +610,7 @@ function openBookActions(book) {
 function closeBookActions() {
   closeModal(els.bookActionsModal);
   bookActionsBook = null;
+  bookActionsMode = "maintenance";
 }
 els.bookActionsModal.addEventListener("click", (e) => {
   if (e.target === els.bookActionsModal || e.target.hasAttribute("data-close-book-actions")) closeBookActions();
@@ -613,6 +618,11 @@ els.bookActionsModal.addEventListener("click", (e) => {
 els.bookActionReset.addEventListener("click", async () => {
   const book = bookActionsBook;
   if (!book) return;
+  if (bookActionsMode === "unread") {
+    closeBookActions();
+    await openReader(book);
+    return;
+  }
   els.bookActionReset.disabled = true;
   const done = await resetProgress(book);
   els.bookActionReset.disabled = false;
