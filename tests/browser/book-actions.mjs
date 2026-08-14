@@ -1,9 +1,12 @@
 // Per-book maintenance lives behind one ellipsis menu. This exercises both
 // options against the real backend and verifies deletion never feeds staging.
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
+import { chromium, webkit } from "playwright";
 import { baseURL } from "./reader-harness.mjs";
 
+const browserName = process.env.HONLIB_BROWSER ?? "chromium";
+const browserType = { chromium, webkit }[browserName];
+if (!browserType) throw new Error(`unsupported browser: ${browserName}`);
 
 const library = await fetch(`${baseURL}/api/library`).then((r) => r.json());
 const book = library.books[0];
@@ -15,7 +18,7 @@ await fetch(`${baseURL}/api/progress`, {
   body: JSON.stringify({ book_id: book.id, cfi: "epubcfi(/6/2)", percent: 1 }),
 });
 
-const browser = await chromium.launch({ headless: true });
+const browser = await browserType.launch({ headless: true });
 try {
   const context = await browser.newContext({ serviceWorkers: "block" });
   const page = await context.newPage();
@@ -60,4 +63,4 @@ try {
   await browser.close();
 }
 
-console.log("book actions passed");
+console.log(`${browserName}: book actions passed`);
