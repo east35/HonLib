@@ -9,6 +9,9 @@ tap-to-define dictionary lookup, bookmarks, and progress that syncs across devic
 
 Licensed [AGPL-3.0](LICENSE).
 
+Dictionary entries are sourced from Wiktionary via [FreeDictionaryAPI.com](https://freedictionaryapi.com/)
+under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The reader links each entry to its Wiktionary source.
+
 ## Why HonLib
 
 I wanted off the Kindle ecosystem — no proprietary formats, no vendor lock-in,

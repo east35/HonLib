@@ -11,6 +11,7 @@ import time
 import uuid
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import quote, urlsplit
 
 import requests
 from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file, send_from_directory, session
@@ -518,39 +519,147 @@ def config():
 
 DICT_CACHE_DIR = CONFIG_DIR / "dict-cache"
 DICT_WORD_RE = re.compile(r"^[a-z][a-z'-]{0,63}$")
+DICT_NEGATIVE_CACHE_SECONDS = 15 * 60
 
 
 @app.route("/api/dictionary/<word>")
 def dictionary(word):
-    # Look up a single English word via the free dictionaryapi.dev, caching each
-    # result (hits and misses) to disk so repeat lookups are instant and offline.
+    # Use FreeDictionaryAPI's Wiktionary data first, with dictionaryapi.dev as
+    # a fallback. Cache successful results so repeat lookups are instant and
+    # work offline. Older releases cached failures forever, so discard those.
     word = (word or "").strip().lower()
     if not DICT_WORD_RE.match(word):
         return jsonify({"word": word, "notFound": True})
     cache_file = DICT_CACHE_DIR / f"{word}.json"
     try:
         if cache_file.is_file():
-            return jsonify(json.loads(cache_file.read_text("utf-8")))
+            cached = json.loads(cache_file.read_text("utf-8"))
+            if isinstance(cached, dict) and not cached.get("notFound") and cached.get("meanings"):
+                return jsonify(cached)
+            if (
+                isinstance(cached, dict)
+                and cached.get("notFound")
+                and isinstance(cached.get("expiresAt"), (int, float))
+                and cached["expiresAt"] > time.time()
+            ):
+                return jsonify({"word": word, "notFound": True})
+            # Clear permanent negative-cache entries written by older releases.
+            cache_file.unlink(missing_ok=True)
     except (OSError, ValueError):
         pass
-    try:
-        resp = requests.get(f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}", timeout=6)
-    except requests.RequestException:
-        # Network failure: don't cache (it may be transient), just report a miss.
-        return jsonify({"word": word, "notFound": True})
-    if resp.status_code == 200:
+
+    # This provider supplies English entries from Wiktionary and is reachable
+    # where dictionaryapi.dev may time out. Keep a short connect/read timeout so
+    # the backup has a chance to answer promptly when the primary is unavailable.
+    encoded_word = quote(word, safe="'-")
+    status, data = _dictionary_request(
+        f"https://freedictionaryapi.com/api/v1/entries/en/{encoded_word}",
+        timeout=(3, 6),
+    )
+    primary_not_found = status == 404
+    if status == 200:
         try:
-            payload = _trim_dictionary(word, resp.json())
-        except ValueError:
+            payload = _trim_free_dictionary(word, data)
+        except (TypeError, ValueError):
             payload = {"word": word, "notFound": True}
-    else:
-        payload = {"word": word, "notFound": True}
+        if not payload.get("notFound"):
+            _cache_dictionary(cache_file, payload)
+            return jsonify(payload)
+        primary_not_found = True
+
+    # Retain the existing provider as a fallback. A temporary error from one
+    # source must never be mistaken for a durable missing-word result.
+    status, data = _dictionary_request(
+        f"https://api.dictionaryapi.dev/api/v2/entries/en/{encoded_word}",
+        timeout=(3, 6),
+    )
+    fallback_not_found = status == 404
+    if status == 200:
+        try:
+            payload = _trim_dictionary(word, data)
+        except (TypeError, ValueError):
+            payload = {"word": word, "notFound": True}
+        if not payload.get("notFound"):
+            _cache_dictionary(cache_file, payload)
+            return jsonify(payload)
+        fallback_not_found = True
+
+    if primary_not_found and fallback_not_found:
+        _cache_dictionary(
+            cache_file,
+            {"word": word, "notFound": True, "expiresAt": time.time() + DICT_NEGATIVE_CACHE_SECONDS},
+        )
+        return jsonify({"word": word, "notFound": True})
+    return jsonify({"word": word, "unavailable": True}), 503
+
+
+def _dictionary_request(url, timeout):
+    """Return (status, JSON body) while turning transport/JSON failures into status 0."""
+    try:
+        resp = requests.get(url, timeout=timeout)
+    except requests.RequestException:
+        return 0, None
+    if resp.status_code != 200:
+        return resp.status_code, None
+    try:
+        return 200, resp.json()
+    except (TypeError, ValueError):
+        return 0, None
+
+
+def _cache_dictionary(cache_file, payload):
     try:
         DICT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps(payload), "utf-8")
     except OSError:
         pass
-    return jsonify(payload)
+
+
+def _trim_free_dictionary(word, data):
+    """Convert FreeDictionaryAPI's structured Wiktionary response for the reader."""
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        raise ValueError("Unexpected dictionary response")
+    phonetic = ""
+    meanings = []
+    for entry in data["entries"]:
+        if not isinstance(entry, dict):
+            continue
+        language = entry.get("language")
+        if not isinstance(language, dict) or not str(language.get("code") or "").startswith("en"):
+            continue
+        if not phonetic:
+            phonetic = next((
+                p["text"] for p in entry.get("pronunciations") or []
+                if isinstance(p, dict) and isinstance(p.get("text"), str) and p["text"]
+            ), "")
+        definitions = []
+        for sense in entry.get("senses") or []:
+            if isinstance(sense, dict) and isinstance(sense.get("definition"), str) and sense["definition"]:
+                definitions.append(sense["definition"])
+            if len(definitions) >= 4:
+                break
+        if definitions:
+            pos = entry.get("partOfSpeech")
+            meanings.append({
+                "partOfSpeech": pos if isinstance(pos, str) else "",
+                "definitions": definitions,
+            })
+        if len(meanings) >= 4:
+            break
+    if not meanings:
+        return {"word": word, "notFound": True}
+
+    source = data.get("source")
+    source_url = source.get("url") if isinstance(source, dict) else ""
+    parsed_source = urlsplit(source_url) if isinstance(source_url, str) else None
+    if not (
+        parsed_source
+        and parsed_source.scheme == "https"
+        and parsed_source.netloc == "en.wiktionary.org"
+        and parsed_source.path.startswith("/wiki/")
+    ):
+        source_url = "https://en.wiktionary.org/wiki/" + quote(word, safe="'-")
+    return {"word": word, "phonetic": phonetic, "meanings": meanings, "sourceUrl": source_url}
 
 
 def _trim_dictionary(word, entries):
@@ -559,12 +668,19 @@ def _trim_dictionary(word, entries):
     phonetic = ""
     meanings = []
     for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
         if not phonetic:
-            phonetic = entry.get("phonetic") or next((p.get("text") for p in entry.get("phonetics", []) if p.get("text")), "")
-        for meaning in entry.get("meanings", []):
-            defs = [d.get("definition") for d in meaning.get("definitions", []) if d.get("definition")][:4]
+            phonetic = entry.get("phonetic") if isinstance(entry.get("phonetic"), str) else ""
+            if not phonetic:
+                phonetic = next((p.get("text") for p in entry.get("phonetics") or [] if isinstance(p, dict) and isinstance(p.get("text"), str) and p["text"]), "")
+        for meaning in entry.get("meanings") or []:
+            if not isinstance(meaning, dict):
+                continue
+            defs = [d["definition"] for d in meaning.get("definitions") or [] if isinstance(d, dict) and isinstance(d.get("definition"), str) and d["definition"]][:4]
             if defs:
-                meanings.append({"partOfSpeech": meaning.get("partOfSpeech") or "", "definitions": defs})
+                pos = meaning.get("partOfSpeech")
+                meanings.append({"partOfSpeech": pos if isinstance(pos, str) else "", "definitions": defs})
     if not meanings:
         return {"word": word, "notFound": True}
     return {"word": word, "phonetic": phonetic, "meanings": meanings[:4]}
