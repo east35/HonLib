@@ -1587,43 +1587,34 @@ function evaluateSelection(doc) {
   // Single word only: strip surrounding punctuation, reject phrases / non-words.
   const word = sel.toString().trim().replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "");
   if (!word || /\s/.test(word) || !/^[A-Za-z][A-Za-z'-]*$/.test(word) || word.length > 64) { closeDictPopover(); return; }
-  let rect;
-  try { rect = sel.getRangeAt(0).getBoundingClientRect(); } catch { return; }
-  // The rect is in the iframe's coordinate space; offset to host-viewport coords.
-  const frame = doc.defaultView && doc.defaultView.frameElement;
-  const fr = frame ? frame.getBoundingClientRect() : els.viewer.getBoundingClientRect();
-  lookupWord(word, { left: fr.left + rect.left, top: fr.top + rect.top, bottom: fr.top + rect.bottom, width: rect.width });
+  lookupWord(word);
 }
-async function lookupWord(word, anchor) {
+async function lookupWord(word) {
   const reqId = ++dictReqId;
-  showDictPopover(`<div class="dict-word">${escapeHtml(word)}</div><div class="dict-status">Looking up…</div>`, anchor);
+  showDictPopover(`<div class="dict-word">${escapeHtml(word)}</div><div class="dict-status">Looking up…</div>`);
   let data;
   try { data = await api(`/api/dictionary/${encodeURIComponent(word.toLowerCase())}`); }
-  catch { if (reqId === dictReqId) showDictPopover(`<div class="dict-word">${escapeHtml(word)}</div><div class="dict-status">Couldn't reach the dictionary.</div>`, anchor); return; }
+  catch { if (reqId === dictReqId) showDictPopover(`<div class="dict-word">${escapeHtml(word)}</div><div class="dict-status">Couldn't reach the dictionary.</div>`); return; }
   if (reqId !== dictReqId) return; // a newer selection superseded this lookup
   if (!data || data.notFound || !(data.meanings || []).length) {
-    showDictPopover(`<div class="dict-word">${escapeHtml(word)}</div><div class="dict-status">No definition found.</div>`, anchor);
+    showDictPopover(`<div class="dict-word">${escapeHtml(word)}</div><div class="dict-status">No definition found.</div>`);
     return;
   }
   const head = `<div class="dict-word">${escapeHtml(data.word || word)}${data.phonetic ? `<span class="dict-phonetic">${escapeHtml(data.phonetic)}</span>` : ""}</div>`;
-  const body = data.meanings.map((m) =>
-    `${m.partOfSpeech ? `<div class="dict-pos">${escapeHtml(m.partOfSpeech)}</div>` : ""}<ol class="dict-defs">${m.definitions.map((d) => `<li>${escapeHtml(d)}</li>`).join("")}</ol>`
+  // Keep the sheet glanceable without touch scrolling: show the lead
+  // definition for each of the first few parts of speech.
+  const body = data.meanings.slice(0, 4).map((m) =>
+    `${m.partOfSpeech ? `<div class="dict-pos">${escapeHtml(m.partOfSpeech)}</div>` : ""}<ol class="dict-defs">${(m.definitions || []).slice(0, 1).map((d) => `<li>${escapeHtml(d)}</li>`).join("")}</ol>`
   ).join("");
-  showDictPopover(head + body, anchor);
+  const attribution = data.sourceUrl
+    ? `<div class="dict-attribution">From <a href="${escapeHtml(data.sourceUrl)}" target="_blank" rel="noopener noreferrer">Wiktionary</a>, via <a href="https://freedictionaryapi.com/" target="_blank" rel="noopener noreferrer">FreeDictionaryAPI.com</a> under <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>.</div>`
+    : "";
+  showDictPopover(head + body + attribution);
 }
-function showDictPopover(html, anchor) {
-  els.dictPopover.innerHTML = html;
+function showDictPopover(html) {
+  els.dictPopover.innerHTML = `<button class="dict-close" type="button" aria-label="Close definition">Done</button>${html}`;
   els.dictPopover.classList.remove("hidden");
-  const pop = els.dictPopover, m = 8, vw = window.innerWidth, vh = window.innerHeight;
-  // Prefer below the word; flip above if it would overflow the bottom edge.
-  let top = anchor.bottom + m;
-  if (top + pop.offsetHeight > vh - m) top = anchor.top - pop.offsetHeight - m;
-  top = Math.max(m, Math.min(top, vh - pop.offsetHeight - m));
-  // Center on the word, clamped within the viewport.
-  let left = anchor.left + anchor.width / 2 - pop.offsetWidth / 2;
-  left = Math.max(m, Math.min(left, vw - pop.offsetWidth - m));
-  pop.style.top = `${top}px`;
-  pop.style.left = `${left}px`;
+  els.dictPopover.querySelector(".dict-close").addEventListener("click", closeDictPopover);
 }
 // Bump the request id so any in-flight lookup is ignored when it returns.
 function closeDictPopover() { dictReqId++; clearTimeout(dictDebounce); els.dictPopover.classList.add("hidden"); }
