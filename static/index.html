@@ -53,6 +53,7 @@
   <main>
     <section class="lib-section hidden" id="flat-section"><div id="flat-results" class="library"></div></section>
     <section class="lib-section hidden" id="inprogress-section"><div class="lib-head"><h2>In Progress</h2></div><div id="inprogress" class="library"></div></section>
+    <section class="lib-section hidden" id="journals-section"><div class="lib-head"><h2>Journals</h2><button type="button" id="journal-new" class="btn ghost">New journal</button></div><div id="journals" class="library"></div></section>
     <section class="lib-section" id="library-section"><div id="library" class="library"></div></section>
     <section class="lib-section hidden" id="finished-section"><div class="lib-head"><h2>Complete</h2></div><div id="finished" class="library"></div></section>
   </main>
@@ -149,6 +150,25 @@
     </div>
   </div>
 
+  <div id="journal-view" class="journal-view hidden" role="dialog" aria-modal="true" aria-labelledby="journal-title">
+    <div class="journal-head">
+      <button id="journal-back" class="btn icon-btn" title="Back to library" aria-label="Back to library"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg></button>
+      <h2 id="journal-title" class="journal-title"></h2>
+      <button id="journal-settings-toggle" class="btn" type="button" aria-expanded="false">Settings</button>
+    </div>
+    <div id="journal-settings" class="journal-settings hidden"></div>
+    <div id="journal-tools" class="journal-tools">
+      <input id="journal-search" type="text" placeholder="Search passages" autocomplete="off" aria-label="Search passages" />
+      <select id="journal-filter-tag" aria-label="Filter by tag"></select>
+      <select id="journal-filter-book" aria-label="Filter by book"></select>
+      <select id="journal-filter-style" aria-label="Filter by style"></select>
+      <select id="journal-filter-state" aria-label="Filter by status"></select>
+      <select id="journal-sort" aria-label="Sort passages"></select>
+    </div>
+    <div id="journal-count" class="journal-count" role="status"></div>
+    <div id="journal-cards" class="journal-cards"></div>
+  </div>
+
   <div id="reader" class="reader hidden" tabindex="0">
     <div class="reader-sheet">
       <div class="reader-controls">
@@ -185,10 +205,27 @@
         <div class="toc-segmented" role="tablist" aria-label="Book navigation">
           <button id="toc-contents-tab" type="button" class="active" role="tab" aria-selected="true">Chapters</button>
           <button id="toc-bookmarks-tab" type="button" role="tab" aria-selected="false">Bookmarks</button>
+          <button id="toc-passages-tab" type="button" role="tab" aria-selected="false">Passages</button>
         </div>
       </div>
       <div id="toc-list" class="toc-list"></div>
       <div id="bookmarks-list" class="toc-list hidden"></div>
+      <div id="passages-panel" class="passages-panel hidden">
+        <div class="passages-tools">
+          <div class="toc-segmented passages-scope" role="group" aria-label="Passages to show">
+            <button id="passages-scope-book" type="button" class="active" aria-pressed="true">This book</button>
+            <button id="passages-scope-journal" type="button" aria-pressed="false">Journal</button>
+          </div>
+          <input id="passages-search" class="hidden" type="text" placeholder="Search journal" autocomplete="off" aria-label="Search journal" />
+          <select id="passages-tag" class="hidden" aria-label="Filter by tag"></select>
+        </div>
+        <div id="passages-list" class="toc-list"></div>
+      </div>
+    </div>
+    <div id="visit-bar" class="visit-bar hidden" role="status">
+      <span id="visit-label" class="visit-label"></span>
+      <button id="visit-back" class="btn" type="button">Back to journal</button>
+      <button id="visit-place" class="btn" type="button">Go to my place</button>
     </div>
     <div id="epub-viewer"></div>
     <button id="bookmark-toggle" class="bookmark-toggle" type="button" title="Add bookmark" aria-label="Add bookmark" aria-pressed="false">
@@ -196,6 +233,7 @@
     </button>
     <div id="reader-flash" class="reader-flash hidden" aria-hidden="true"></div>
     <div id="dict-popover" class="dict-popover hidden" role="dialog" aria-live="polite"></div>
+    <div id="passage-sheet" class="passage-sheet hidden" role="dialog" aria-label="Passage"></div>
     <div id="reader-loading" class="reader-loading hidden" role="status" aria-live="polite">Loading…</div>
     <div id="reader-progress" class="reader-progress hidden" aria-hidden="true">
       <div id="reader-progress-label" class="reader-progress-label hidden"></div>

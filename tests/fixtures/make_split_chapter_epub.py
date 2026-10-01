@@ -9,11 +9,15 @@ that the contents view has no entry for. This fixture reproduces that shape:
 
     spine:  one  two  two-continued  three
     toc:    One  Two  -              Three
+
+The title, author, series and identifier can be overridden, so the same shape
+also serves as "another book" wherever a test needs a small library.
 """
 
-import sys
+import argparse
 import zipfile
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 
 MIMETYPE = "application/epub+zip"
@@ -28,11 +32,11 @@ PACKAGE = """<?xml version="1.0" encoding="UTF-8"?>
 <package version="3.0" unique-identifier="book-id"
          xmlns="http://www.idpf.org/2007/opf">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="book-id">urn:uuid:honlib-split-chapter-test</dc:identifier>
-    <dc:title>HonLib Split Chapter Test</dc:title>
-    <dc:creator>HonLib Test Suite</dc:creator>
+    <dc:identifier id="book-id">{identifier}</dc:identifier>
+    <dc:title>{title}</dc:title>
+    <dc:creator>{author}</dc:creator>
     <dc:language>en</dc:language>
-    <meta property="dcterms:modified">2026-06-28T00:00:00Z</meta>
+    <meta property="dcterms:modified">2026-06-28T00:00:00Z</meta>{series}
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
@@ -94,13 +98,28 @@ def document(title, anchor, paragraphs=40):
     return DOCUMENT.format(title=title, heading=heading, paragraphs=body)
 
 
-def make_epub(output):
+def make_epub(
+    output,
+    title="HonLib Split Chapter Test",
+    author="HonLib Test Suite",
+    identifier="urn:uuid:honlib-split-chapter-test",
+    series=None,
+    series_index=None,
+):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    series_meta = ""
+    if series:
+        series_meta = f'\n    <meta name="calibre:series" content="{escape(series, {chr(34): "&quot;"})}"/>'
+        if series_index is not None:
+            series_meta += f'\n    <meta name="calibre:series_index" content="{series_index}"/>'
+    package = PACKAGE.format(
+        identifier=escape(identifier), title=escape(title), author=escape(author), series=series_meta,
+    )
     with zipfile.ZipFile(output, "w") as epub:
         epub.writestr("mimetype", MIMETYPE, compress_type=zipfile.ZIP_STORED)
         epub.writestr("META-INF/container.xml", CONTAINER)
-        epub.writestr("EPUB/package.opf", PACKAGE)
+        epub.writestr("EPUB/package.opf", package)
         epub.writestr("EPUB/nav.xhtml", NAV)
         epub.writestr("EPUB/one.xhtml", document("One", "one"))
         epub.writestr("EPUB/two.xhtml", document("Two", "two"))
@@ -110,6 +129,12 @@ def make_epub(output):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit(f"usage: {Path(sys.argv[0]).name} OUTPUT.epub")
-    make_epub(sys.argv[1])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("output", metavar="OUTPUT.epub")
+    parser.add_argument("--title")
+    parser.add_argument("--author")
+    parser.add_argument("--identifier")
+    parser.add_argument("--series")
+    parser.add_argument("--series-index")
+    args = vars(parser.parse_args())
+    make_epub(args.pop("output"), **{key: value for key, value in args.items() if value is not None})

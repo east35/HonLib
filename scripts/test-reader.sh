@@ -22,11 +22,24 @@ trap cleanup EXIT INT TERM
 mkdir -p "$TMP/books" "$TMP/config" "$TMP/staging"
 "$PYTHON" "$ROOT/tests/fixtures/make_split_chapter_epub.py" \
   "$TMP/books/split-chapter-test.epub"
+# The journal tests need more than one book: a two-volume series by a second
+# author. Opt-in, because the reader tests above assume a one-book library.
+if [ -n "${HONLIB_TEST_SERIES:-}" ]; then
+  "$PYTHON" "$ROOT/tests/fixtures/make_split_chapter_epub.py" \
+    "$TMP/books/Wayfarers/01 - First Volume.epub" --title "First Volume" \
+    --author "Ann Author" --identifier "urn:uuid:honlib-wayfarers-1" \
+    --series "Wayfarers" --series-index 1
+  "$PYTHON" "$ROOT/tests/fixtures/make_split_chapter_epub.py" \
+    "$TMP/books/Wayfarers/02 - Second Volume.epub" --title "Second Volume" \
+    --author "Ann Author" --identifier "urn:uuid:honlib-wayfarers-2" \
+    --series "Wayfarers" --series-index 2
+fi
 
 PYTHONPATH="$ROOT" \
 EBOOK_LIB_CONFIG_DIR="$TMP/config" \
 EBOOK_LIB_FOLDER="$TMP/books" \
 EBOOK_LIB_STAGING="$TMP/staging" \
+EBOOK_LIB_JOURNAL_DIR="$TMP/journal" \
   "$PYTHON" -c "
 import app
 app.app.run(host='127.0.0.1', port=${PORT}, use_reloader=False)

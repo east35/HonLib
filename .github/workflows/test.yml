@@ -89,3 +89,7 @@ jobs:
         env:
           HONLIB_BROWSER: ${{ matrix.browser }}
         run: npm run test:reader
+      - name: Test annotations and journals
+        env:
+          HONLIB_BROWSER: ${{ matrix.browser }}
+        run: npm run test:journal
