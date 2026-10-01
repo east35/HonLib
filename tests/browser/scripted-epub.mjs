@@ -72,13 +72,19 @@ async function runEngine(name, engine) {
       delete headers["content-security-policy"];
       await route.fulfill({ response, headers });
     });
-    const controlPage = await controlContext.newPage();
-    const controlResult = await openProbe(controlPage);
-    assert.equal(controlResult.probePresent, true, `${name}: control probe missing`);
-    assert.equal(controlResult.status, "SCRIPT EXECUTED", `${name}: negative control did not execute`);
-    assert.equal(controlResult.messageReceived, true, `${name}: negative control did not reach parent`);
-    assertAssets(`${name} negative control`, controlResult);
-    await controlContext.close();
+    try {
+      const controlPage = await controlContext.newPage();
+      const controlResult = await openProbe(controlPage);
+      assert.equal(controlResult.probePresent, true, `${name}: control probe missing`);
+      assert.equal(controlResult.status, "SCRIPT EXECUTED", `${name}: negative control did not execute`);
+      assert.equal(controlResult.messageReceived, true, `${name}: negative control did not reach parent`);
+      assertAssets(`${name} negative control`, controlResult);
+    } finally {
+      // The reader is still saving progress when the probe resolves. Drop the
+      // route first so a request caught mid-fetch cannot reject after close.
+      await controlContext.unrouteAll({ behavior: "ignoreErrors" });
+      await controlContext.close();
+    }
     console.log(`${name}: CSP blocked the scripted EPUB; negative control executed`);
   } finally {
     await browser.close();
