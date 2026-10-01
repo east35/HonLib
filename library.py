@@ -25,6 +25,21 @@ def book_id_for_relpath(relpath):
     return hashlib.sha256(relpath.encode("utf-8")).hexdigest()[:16]
 
 
+def book_key_for(meta):
+    """Identity of a book that survives its file being renamed or re-shelved.
+
+    A book's id is a hash of its path, so it changes whenever the file moves.
+    Anything that has to outlive that (a passage quoted from the book) refers to
+    this key instead: the EPUB's own identifier, or its title and author when it
+    declares none.
+    """
+    identifier = " ".join(str(meta.get("identifier") or "").split())
+    if identifier:
+        return f"id:{identifier}"
+    part = lambda value: " ".join(str(value or "").split()).casefold()
+    return f"ta:{part(meta.get('title'))}|{part(meta.get('author'))}"
+
+
 def _safe_relpath(root, path):
     root = Path(root).resolve()
     path = Path(path).resolve()
@@ -122,6 +137,32 @@ def _cover_item(book):
     return None
 
 
+def _unique_identifier(path):
+    """The identifier the package declares as its own: the dc:identifier that
+    its `unique-identifier` attribute names, or failing that the first one.
+
+    Read from the OPF directly. ebooklib keeps only whichever identifier it
+    happened to see last, and the reader (foliate) resolves it this way, so a
+    device can work out the same key from the book alone.
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            root = ET.fromstring(zf.read(_opf_path(zf)))
+    except Exception:
+        return None
+    wanted = root.get("unique-identifier")
+    first = None
+    for el in root.iter(f"{{{epub.NAMESPACES['DC']}}}identifier"):
+        text = " ".join((el.text or "").split())
+        if not text:
+            continue
+        if wanted and el.get("id") == wanted:
+            return text
+        if first is None:
+            first = text
+    return first
+
+
 def read_book_metadata(path):
     path = Path(path)
     title = path.stem
@@ -129,6 +170,7 @@ def read_book_metadata(path):
     series = None
     series_index = None
     genre = None
+    identifier = None
     cover_mime = None
     has_cover = False
     try:
@@ -150,7 +192,8 @@ def read_book_metadata(path):
             has_cover = True
         except Exception:
             pass
-    return {"title": title, "author": author, "series": series, "series_index": series_index, "genre": genre, "cover_mime": cover_mime, "has_cover": has_cover}
+    identifier = _unique_identifier(path)
+    return {"title": title, "author": author, "series": series, "series_index": series_index, "genre": genre, "identifier": identifier, "cover_mime": cover_mime, "has_cover": has_cover}
 
 
 def read_cover(path):
@@ -260,12 +303,14 @@ def _scan_library_uncached(root):
         parent = path.parent.name if path.parent != root else "Library"
         books.append({
             "id": book_id,
+            "key": book_key_for(meta),
             "path": rel,
             "filename": path.name,
             "group": parent,
             "title": meta["title"],
             "author": meta["author"],
             "series": meta["series"],
+            "series_index": meta["series_index"],
             "genre": meta["genre"],
             "has_cover": meta["has_cover"],
             "cover_url": f"/api/book/{book_id}/cover" if meta["has_cover"] else None,

@@ -16,6 +16,7 @@ from urllib.parse import quote, urlsplit
 import requests
 from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file, send_from_directory, session
 
+import journal
 import library
 import progress
 import web_bundle
@@ -732,6 +733,63 @@ def post_bookmark():
         label=data.get("label"),
     )
     return jsonify({"ok": True, "book_id": book_id, "bookmarks": bookmarks})
+
+
+# ---- Annotations ---------------------------------------------------------
+# Passages and journals are documents the reader writes whole. The server keeps
+# whichever version of a document is newer and hands changes back out; what a
+# document means (which journal a highlight is filed in, and why) is decided on
+# the device, so that it can be decided with no server in reach.
+
+@app.route("/api/journal/sync")
+def journal_sync():
+    return jsonify(journal.store.changes(request.args.get("since")))
+
+
+@app.route("/api/journal/<kind>/<doc_id>", methods=["POST"])
+def journal_put(kind, doc_id):
+    if kind not in journal.KINDS:
+        abort(404)
+    # JSON only, for the same reason as book deletion: a cross-site HTML form
+    # cannot send this content type.
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "JSON request required"}), 415
+    try:
+        doc = journal.normalize(kind, request.get_json(silent=True), doc_id)
+        applied, stored = journal.store.put(kind, doc)
+    except journal.InvalidDocument as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    # `doc` is what is on record now. When the write lost to a newer version,
+    # that is the version the device should take up.
+    return jsonify({"ok": True, "applied": applied, "doc": stored})
+
+
+@app.route("/api/journal/search")
+def journal_search():
+    passages = journal.store.search(
+        request.args.get("q", ""),
+        journal=request.args.get("journal") or None,
+        tag=request.args.get("tag") or None,
+    )
+    return jsonify({"passages": passages})
+
+
+@app.route("/api/journal/journals/<doc_id>/export.md")
+def journal_export(doc_id):
+    doc = journal.store.get("journals", doc_id) if journal.ID_RE.match(doc_id) else None
+    if not doc or doc.get("deleted"):
+        abort(404)
+    books = library.scan_library(current_library_folder(), use_cache=True)
+    text = journal.render_markdown(doc, journal.store.all("passages"), books)
+    from io import BytesIO
+    resp = send_file(
+        BytesIO(text.encode("utf-8")),
+        mimetype="text/markdown",
+        as_attachment=True,
+        download_name=f"{_safe_name(doc.get('name'), 'Journal')}.md",
+    )
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.route("/api/download", methods=["POST"])

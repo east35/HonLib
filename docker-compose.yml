@@ -9,12 +9,14 @@ services:
       # Defaults are self-contained dirs created next to this compose file.
       - ${EBOOK_LIB_BOOKS_DIR:-./data/books}:/data/books
       - ${EBOOK_LIB_STAGING_DIR:-./data/staging}:/data/staging
+      - ${EBOOK_LIB_JOURNAL_DIR:-./data/journal}:/data/journal
       - ./config:/data/config
     environment:
       EBOOK_LIB_NO_BROWSER: "1"
       EBOOK_LIB_FOLDER: /data/books
       EBOOK_LIB_STAGING: /data/staging
       EBOOK_LIB_CONFIG_DIR: /data/config
+      EBOOK_LIB_JOURNAL_DIR: /data/journal
       EBOOK_LIB_CONTAINER: "1"
       EBOOK_LIB_PASSWORD: ${EBOOK_LIB_PASSWORD:-}
       EBOOK_LIB_USERNAME: ${EBOOK_LIB_USERNAME:-}

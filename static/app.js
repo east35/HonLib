@@ -1,4 +1,7 @@
 import "./vendor/foliate-js/view.js";
+import * as CFI from "./vendor/foliate-js/epubcfi.js";
+import * as store from "./journal-store.js";
+import { UNFILED, dismissLoweredJournal, filingDismissed, initJournals, journalOverReader, lastStyle, lowerJournal, mountFilingTool, mountNoteTool, mountStyleTool, mountTagTool, openJournal, quoteHtml, raiseJournal, renderShelf } from "./journal.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -12,7 +15,7 @@ const els = {
   appUpdate: $("#app-update"), appUpdateMessage: $("#app-update-message"), appUpdateApply: $("#app-update-apply"), appUpdateDismiss: $("#app-update-dismiss"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
   bookActionsModal: $("#book-actions-modal"), bookActionsTitle: $("#book-actions-title"), bookActionReset: $("#book-action-reset"), bookActionDelete: $("#book-action-delete"),
-  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
+  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), passageSheet: $("#passage-sheet"), tocPassagesTab: $("#toc-passages-tab"), passagesPanel: $("#passages-panel"), passagesList: $("#passages-list"), passagesScopeBook: $("#passages-scope-book"), passagesScopeJournal: $("#passages-scope-journal"), passagesSearch: $("#passages-search"), passagesTag: $("#passages-tag"), visitBar: $("#visit-bar"), visitLabel: $("#visit-label"), visitBack: $("#visit-back"), visitPlace: $("#visit-place"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
 };
 
 let currentJob = null;
@@ -38,6 +41,31 @@ let readerView = null;
 // `dictDebounce` coalesces the rapid selectionchange events of a drag-select.
 let dictReqId = 0;
 let dictDebounce = null;
+// The text selected in the book and not yet acted on: { doc, index, range,
+// text }. Kept from the moment a selection settles, so Save and the annotation
+// bar act on what was selected even if the tap on them disturbs the selection.
+let pendingSelection = null;
+// The annotation sheet: { mode: "new" } while it offers to mark a fresh
+// selection; { mode: "view", id } for a passage made earlier, which is shown
+// with the way to its journal rather than opened for editing; { mode: "edit",
+// id, tool, handle, notice, then } with the editing tools.
+let passageSheet = null;
+// Where each passage is drawn in the loaded section, for telling a tap on a
+// mark from a tap on the page: passage id -> { doc, rects }.
+const markRects = new Map();
+// What has been handed to foliate to draw: passage id -> { cfi, sig }.
+const drawnMarks = new Map();
+// A visit: a book opened at a passage from a journal. Nothing about it is
+// saved, so the reader's place and finished status are untouched.
+// { passage, fromBook, viaJournal, returnCfi } where fromBook is the book that
+// was being read when the journal was consulted from inside the reader (null
+// from the journal on the home page), and viaJournal says that was the journal
+// view opened over the page rather than the reader's Passages tab. returnCfi
+// is set when the passage is in the very book being read: the page to go back
+// to, since there is no other book to reopen.
+let visit = null;
+let passagesScope = "book";
+let passagesPolling = false;
 let currentLocation = { fraction: 0, tocHref: null, cfi: null, label: "Bookmark", sectionIndex: 0, timeSection: null, timeTotal: null };
 // Cumulative book fraction at each spine section boundary, straight from
 // foliate. Chapters are derived from these (see buildChapterModel); the book bar
@@ -292,7 +320,11 @@ async function resyncReaderTo(entry) {
 // idle showing an old position. Pull the latest and catch up before the user can
 // trigger a relocate that would save the stale spot.
 async function refreshOpenReaderProgress() {
-  if (!currentBook || !readerView || !readerReady) return;
+  // Coming back to the app is also when another device's highlights are most
+  // likely to be waiting.
+  store.sync();
+  // A visit is deliberately somewhere other than the saved place.
+  if (!currentBook || !readerView || !readerReady || visit) return;
   let entry, data;
   try { data = await api("/api/progress"); entry = data && data.books ? data.books[currentBook.id] : null; }
   catch { return; }
@@ -459,9 +491,12 @@ function renderTableRow(b, kind) {
 
 // One titled section (plain h2 header + cover grid or table) appended to a
 // container. Same h2 as the top-level section titles — no count, no variation.
-function appendGroupBlock(container, name, books, kind) {
+function appendGroupBlock(container, name, books, kind, group = null) {
   const block = document.createElement("section");
   block.className = "book-group";
+  // The folder this shelf stands for, so a journal that belongs to it can be
+  // placed on it (journal.js).
+  if (group) block.dataset.group = group;
   block.innerHTML = `<div class="lib-head"><h2>${escapeHtml(name)}</h2></div><div class="group-grid"></div>`;
   fillBooks(block.querySelector(".group-grid"), books, kind);
   container.appendChild(block);
@@ -472,7 +507,7 @@ function renderSections() {
   els.librarySection.classList.toggle("hidden", !home);
   els.inprogressSection.classList.add("hidden");
   els.finishedSection.classList.add("hidden");
-  if (!home) { renderResults(); return; }
+  if (!home) { renderResults(); renderShelf(); return; }
   // Home: in-progress rail, folder-grouped library, finished rail.
   const inprog = allBooks.filter(isInProgress);
   const finished = allBooks.filter(isFinished);
@@ -481,19 +516,21 @@ function renderSections() {
   els.finishedSection.classList.toggle("hidden", !finished.length);
   if (finished.length) fillBooks(els.finished, finished, "complete");
   els.library.innerHTML = "";
-  if (!allBooks.length) { els.library.innerHTML = `<div class="lib-empty">No EPUBs found in the library folder.</div>`; return; }
+  if (!allBooks.length) { els.library.innerHTML = `<div class="lib-empty">No EPUBs found in the library folder.</div>`; renderShelf(); return; }
   const ordered = [...allGroups].sort((a, b) =>
     displaySeriesName(a.name).localeCompare(displaySeriesName(b.name), undefined, { sensitivity: "base" }));
   for (const group of ordered) {
-    if (group.books.length) appendGroupBlock(els.library, displaySeriesName(group.name), group.books, "library");
+    if (group.books.length) appendGroupBlock(els.library, displaySeriesName(group.name), group.books, "library", group.name);
   }
+  renderShelf();
 }
 function renderResults() {
   const books = sortBooks(allBooks.filter(bookMatchesFilter));
   els.flatResults.className = "";
   els.flatResults.innerHTML = "";
   if (!books.length) { els.flatResults.innerHTML = `<div class="lib-empty">No books match your search and filters.</div>`; return; }
-  for (const sec of sectionize(books, libView.sort)) appendGroupBlock(els.flatResults, libView.sort === "series" ? displaySeriesName(sec.name) : sec.name, sec.books, null);
+  const bySeries = libView.sort === "series";
+  for (const sec of sectionize(books, libView.sort)) appendGroupBlock(els.flatResults, bySeries ? displaySeriesName(sec.name) : sec.name, sec.books, null, bySeries ? sec.name : null);
 }
 
 // Rebuild the author/series filter dropdowns from the current library, keeping
@@ -810,10 +847,15 @@ function awaitViewerSize(timeout = 2000) {
     check();
   });
 }
-async function openReader(book) {
+async function openReader(book, nextVisit = null) {
   readerReady = false;
+  visit = nextVisit;
   lastRelocateMarker = null;
   pageTurnsSinceRefresh = 0;
+  // A visit made from inside the reader replaces the book that is open.
+  if (readerView) { try { readerView.close(); } catch {} readerView.remove(); readerView = null; }
+  closeReaderSheets();
+  pendingSelection = null; markRects.clear(); drawnMarks.clear();
   els.reader.classList.remove("hidden"); document.body.classList.add("reader-open");
   // Re-pull progress from the server before restoring position. The in-memory
   // `progress` map can be stale if this tab has been open while another device
@@ -829,6 +871,7 @@ async function openReader(book) {
   // since moved to a position this one once wrote, that is a real catch-up.
   ownWrites.delete(book.id);
   currentBook = book;
+  updateVisitBar();
   els.reader.classList.remove("chrome-hidden");
   // Opening + parsing a book can take a few seconds; show a loading overlay so
   // the reader isn't just a blank screen until the first page renders.
@@ -845,6 +888,7 @@ async function openReader(book) {
     // First real position means the page has rendered — drop the loading overlay.
     els.readerLoading.classList.add("hidden");
     closeDictPopover();
+    closeSelectionBar();
     const loc = e.detail || {};
     noteReaderRelocate(loc);
     currentLocation = {
@@ -861,8 +905,15 @@ async function openReader(book) {
     updateProgressUI();
     updateBookmarkButton();
     if (!els.tocView.classList.contains("hidden")) updateTocView();
-    if (readerReady) await saveBookProgress(book, loc.cfi || null, loc.fraction || 0);
+    if (readerReady && !visit) await saveBookProgress(book, loc.cfi || null, loc.fraction || 0);
   });
+  // foliate asks how to draw each annotation it is given, and gives every
+  // section an empty overlay when it loads.
+  readerView.addEventListener("draw-annotation", (e) => {
+    const { draw, annotation, doc, range } = e.detail;
+    draw(passageMark, { id: annotation.id, doc, range });
+  });
+  readerView.addEventListener("create-overlay", (e) => drawSectionMarks(e.detail.index));
   // The book renders in a sandboxed iframe that captures keyboard focus, so
   // forward key events from each loaded chapter document to our handler too.
   readerView.addEventListener("load", (e) => {
@@ -883,8 +934,16 @@ async function openReader(book) {
   try {
     await readerView.open(`/api/book/${book.id}/file`);
   } catch {
-    els.readerLoading.textContent = "Couldn't open this book.";
+    if (visit) showVisitUnavailable();
+    else els.readerLoading.textContent = "Couldn't open this book.";
     return;
+  }
+  // An older shell can serve a library listing that predates book keys. The
+  // book itself says what its key is: the server derives it from the same
+  // identifier.
+  if (!book.key) {
+    const identifier = String(readerView.book?.metadata?.identifier || "").trim().replace(/\s+/g, " ");
+    if (identifier) currentBook = book = { ...book, key: `id:${identifier}` };
   }
   // The TOC is available as soon as the book is parsed; render it now so it
   // never depends on layout/render timing (which is flaky on slow devices).
@@ -902,8 +961,10 @@ async function openReader(book) {
   // saved position miss (leaving the book at the start) until a manual goTo.
   await awaitViewerSize();
   applyReaderTheme();
+  // A visit opens at its passage; reading opens at the saved place.
+  const start = (visit ? visit.passage.source?.cfi : book.cfi) || null;
   try {
-    await readerView.init({ lastLocation: book.cfi || null, showTextStart: true });
+    await readerView.init({ lastLocation: start, showTextStart: true });
   } catch {
     // A stale/unresolvable CFI shouldn't blank the reader — open at the start.
     try { await readerView.init({ lastLocation: null, showTextStart: true }); } catch {}
@@ -915,7 +976,7 @@ async function openReader(book) {
   // init can land short if the view was still sizing (this is the same path that
   // "picking a chapter" exercises). Only then do we allow progress to save.
   requestAnimationFrame(() => requestAnimationFrame(async () => {
-    if (book.cfi) { try { await readerView.goTo(book.cfi); } catch {} }
+    if (start) { try { await readerView.goTo(start); } catch {} }
     applyReaderTheme();
     readerReady = true;
   }));
@@ -957,16 +1018,17 @@ function renderBookmarks() {
   }).join("") : '<div class="bookmarks-empty">No bookmarks yet. Tap the upper-right corner of a page to add one.</div>';
 }
 function setTocTab(tab) {
-  tocTab = tab === "bookmarks" ? "bookmarks" : "contents";
-  const bookmarks = tocTab === "bookmarks";
-  els.tocContentsTab.classList.toggle("active", !bookmarks);
-  els.tocBookmarksTab.classList.toggle("active", bookmarks);
-  els.tocContentsTab.setAttribute("aria-selected", String(!bookmarks));
-  els.tocBookmarksTab.setAttribute("aria-selected", String(bookmarks));
-  els.tocList.classList.toggle("hidden", bookmarks);
-  els.bookmarksList.classList.toggle("hidden", !bookmarks);
-  els.tocLocation.classList.toggle("hidden", bookmarks);
-  if (bookmarks) { renderBookmarks(); els.bookmarksList.scrollTop = 0; }
+  tocTab = tab === "bookmarks" || tab === "passages" ? tab : "contents";
+  const tabs = { contents: [els.tocContentsTab, els.tocList], bookmarks: [els.tocBookmarksTab, els.bookmarksList], passages: [els.tocPassagesTab, els.passagesPanel] };
+  for (const [name, [button, panel]] of Object.entries(tabs)) {
+    button.classList.toggle("active", name === tocTab);
+    button.setAttribute("aria-selected", String(name === tocTab));
+    panel.classList.toggle("hidden", name !== tocTab);
+  }
+  els.tocLocation.classList.toggle("hidden", tocTab !== "contents");
+  if (tocTab === "bookmarks") { renderBookmarks(); els.bookmarksList.scrollTop = 0; }
+  if (tocTab === "passages") { renderPassagesPanel(); els.passagesList.scrollTop = 0; }
+  setPassagesPolling(tocTab === "passages");
 }
 async function toggleBookmark() {
   if (bookmarkSaving || !currentBook || !currentLocation.cfi) return;
@@ -1011,17 +1073,17 @@ function updateTocView() {
   els.tocLocation.innerHTML = `You're about <span class="pct">${pct}%</span> through.`;
   return markCurrentTocItem();
 }
-function openTocView() {
+function openTocView(tab = "contents") {
   closeReaderPopups();
-  closeDictPopover();
+  closeReaderSheets();
   const current = updateTocView();
-  setTocTab("contents");
+  setTocTab(tab);
   els.tocView.classList.remove("hidden");
   if (current) current.scrollIntoView({ block: "center" });
   else els.tocList.scrollTop = 0;
 }
-function closeTocView() { els.tocView.classList.add("hidden"); }
-function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeDictPopover(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
+function closeTocView() { els.tocView.classList.add("hidden"); setPassagesPolling(false); }
+function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; visit = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeReaderSheets(); pendingSelection = null; markRects.clear(); drawnMarks.clear(); updateVisitBar(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
 function saveReaderSettings() { localStorage.setItem("ebook-library.reader", JSON.stringify(readerSettings)); }
 // Measure a font's average glyph advance once (it never changes for a face), so
 // we can solve for the font size that yields a given characters-per-line measure.
@@ -1442,8 +1504,9 @@ function onReaderTap(el, handler) {
     if (!e.isPrimary) return;
     down = true; moved = false; sx = e.clientX; sy = e.clientY; st = Date.now();
     // Captured here because the document-level pointerdown listener closes the
-    // definition popover before this pointerup runs — see dictTapConsumed.
-    dictWasOpen = !els.dictPopover.classList.contains("hidden");
+    // definition popover (or annotation sheet) before this pointerup runs — see
+    // dictTapConsumed.
+    dictWasOpen = readerSheetOpen();
   });
   el.addEventListener("pointermove", (e) => {
     if (down && (Math.abs(e.clientX - sx) > 12 || Math.abs(e.clientY - sy) > 12)) moved = true;
@@ -1462,8 +1525,8 @@ function onReaderTap(el, handler) {
 // keeps the dismissal attributed to the tap that caused it. Taps inside the book
 // never reach that listener, so they can pass nothing and be read live.
 function dictTapConsumed(dictWasOpen) {
-  if (!dictWasOpen && els.dictPopover.classList.contains("hidden")) return false;
-  closeDictPopover();
+  if (!dictWasOpen && !readerSheetOpen()) return false;
+  closeReaderSheets();
   return true;
 }
 // The first tap dismisses an open definition or an open menu instead of turning,
@@ -1491,10 +1554,10 @@ onReaderTap(els.viewer, pageTurnTap);
 // dismissal the page-turn edges do: leaving should never cost a second tap.
 onReaderTap(els.hitBack, (e, dictWasOpen) => {
   if (dictTapConsumed(dictWasOpen)) return;
-  closeReader();
+  leaveReader();
 });
 els.hitBack.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); closeReader(); }
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); leaveReader(); }
 });
 // The bottom edge bar is the dedicated reading-menu target.
 onReaderTap(els.hitMenu, (e, dictWasOpen) => {
@@ -1571,6 +1634,9 @@ function wireReaderInput(doc) {
     if (readerTapConsumed()) return;
     // Let foliate handle in-book links.
     if (e.target.closest && e.target.closest("a")) return;
+    // A tap on a highlight or underline opens that passage instead of turning.
+    const marked = passageAt(doc, e.clientX, e.clientY);
+    if (marked) { openPassageView(marked.id); return; }
     // Convert the tap out of chapter-strip space before applying the zone rule.
     const frame = doc.defaultView && doc.defaultView.frameElement;
     const fr = frame ? frame.getBoundingClientRect() : els.viewer.getBoundingClientRect();
@@ -1583,11 +1649,16 @@ function wireReaderInput(doc) {
 }
 function evaluateSelection(doc) {
   const sel = doc.getSelection();
-  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) { closeDictPopover(); return; }
-  // Single word only: strip surrounding punctuation, reject phrases / non-words.
-  const word = sel.toString().trim().replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "");
-  if (!word || /\s/.test(word) || !/^[A-Za-z][A-Za-z'-]*$/.test(word) || word.length > 64) { closeDictPopover(); return; }
-  lookupWord(word);
+  const text = sel && sel.rangeCount && !sel.isCollapsed ? sel.toString().replace(/\s+/g, " ").trim() : "";
+  if (!text) { pendingSelection = null; closeDictPopover(); closeSelectionBar(); return; }
+  const index = sectionIndexOf(doc);
+  pendingSelection = index == null ? null : { doc, index, range: sel.getRangeAt(0).cloneRange(), text, savedId: null };
+  // A single word (surrounding punctuation stripped) is looked up; anything
+  // more is a passage to annotate.
+  const word = text.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "");
+  if (word && !/\s/.test(word) && /^[A-Za-z][A-Za-z'-]*$/.test(word) && word.length <= 64) { closePassageSheet(); lookupWord(word); return; }
+  closeDictPopover();
+  if (pendingSelection) openSelectionBar();
 }
 async function lookupWord(word) {
   const reqId = ++dictReqId;
@@ -1612,20 +1683,579 @@ async function lookupWord(word) {
   showDictPopover(head + body + attribution);
 }
 function showDictPopover(html) {
-  els.dictPopover.innerHTML = `<button class="dict-close" type="button" aria-label="Close definition">Done</button>${html}`;
+  // Save keeps the word as a passage. Offered whenever there is a selection to
+  // keep, whatever the lookup itself comes back with.
+  const save = pendingSelection && currentBook
+    ? `<button class="dict-save" type="button"${pendingSelection.savedId ? " disabled" : ""}>${pendingSelection.savedId ? "Saved" : "Save"}</button>` : "";
+  els.dictPopover.innerHTML = `<button class="dict-close" type="button" aria-label="Close definition">Done</button>${save}${html}`;
+  els.dictPopover.classList.toggle("can-save", !!save);
   els.dictPopover.classList.remove("hidden");
   els.dictPopover.querySelector(".dict-close").addEventListener("click", closeDictPopover);
+  els.dictPopover.querySelector(".dict-save")?.addEventListener("click", saveDictWord);
 }
 // Bump the request id so any in-flight lookup is ignored when it returns.
 function closeDictPopover() { dictReqId++; clearTimeout(dictDebounce); els.dictPopover.classList.add("hidden"); }
+// ---- Annotations -------------------------------------------------------
+// Selecting more than a word brings up the annotation bar: Highlight,
+// Underline, Tag, Note. Any of them saves the passage on the spot (it is on
+// record, drawn on the page and filed before the tap returns) and then turns
+// the bar into that passage's sheet. Tapping a mark later opens the same sheet.
+function readerSheetOpen() { return !els.dictPopover.classList.contains("hidden") || !!passageSheet; }
+function closeReaderSheets() { closeDictPopover(); closePassageSheet(); }
+function closeSelectionBar() { if (passageSheet?.mode === "new") closePassageSheet(); }
+function sectionIndexOf(doc) {
+  try { return readerView.renderer.getContents().find((c) => c.doc === doc)?.index ?? null; } catch { return null; }
+}
+// A little of the text either side of a passage. Not shown anywhere yet; kept
+// so a passage can be found again if a new edition of its book shifts the CFI.
+function selectionContext(range, span = 120) {
+  try {
+    const doc = range.startContainer.ownerDocument;
+    const before = doc.createRange(), after = doc.createRange();
+    before.selectNodeContents(doc.body); before.setEnd(range.startContainer, range.startOffset);
+    after.selectNodeContents(doc.body); after.setStart(range.endContainer, range.endOffset);
+    const clean = (s) => s.replace(/\s+/g, " ");
+    return { before: clean(before.toString()).slice(-span).trimStart(), after: clean(after.toString()).slice(0, span).trimEnd() };
+  } catch { return { before: "", after: "" }; }
+}
+// The library reports a series position as the text the EPUB holds ("2", "2.0").
+function seriesIndexOf(book) {
+  const raw = book.series_index;
+  const n = raw === null || raw === undefined || raw === "" ? NaN : Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+// Save the pending selection as a passage. Returns { passage, created, first,
+// prompt }: `created` is false when the selection was already a passage,
+// `first` is the journal created for the very first highlight, `prompt` says
+// the book is in no journal and the reader hasn't yet been asked about it.
+function capturePassage(style, { keepSelection = false } = {}) {
+  const pending = pendingSelection;
+  if (!pending || !currentBook || !readerView) return null;
+  let cfi;
+  try { cfi = readerView.getCFI(pending.index, pending.range); } catch { return null; }
+  const key = store.bookKey(currentBook);
+  // Marking exactly what an existing passage covers opens that one rather than
+  // stacking a second on top of it.
+  let passage = store.passagesForBook(key).find((p) => p.source?.cfi === cfi);
+  let first = null, prompt = false;
+  const created = !passage;
+  if (!passage) {
+    const filing = store.filingFor(currentBook);
+    let tocItem = null;
+    try { tocItem = readerView.getProgressOf(pending.index, pending.range)?.tocItem; } catch {}
+    passage = store.savePassage({
+      id: store.newId(),
+      deleted: false,
+      text: pending.text,
+      context: selectionContext(pending.range),
+      note: "",
+      tags: [],
+      style,
+      journals: filing.journals,
+      source: {
+        book_key: key,
+        book_id: currentBook.id,
+        title: currentBook.title || "",
+        author: currentBook.author || "",
+        series: store.bookSeries(currentBook),
+        series_index: seriesIndexOf(currentBook),
+        chapter: tocItem ? tocItemLabel(tocItem) : "",
+        cfi,
+        percent: currentLocation.fraction || 0,
+      },
+    });
+    first = filing.first;
+    prompt = !filing.journals.length && !filingDismissed(key);
+  }
+  if (!keepSelection) { pendingSelection = null; try { readerView.deselect(); } catch {} }
+  return { passage, created, first, prompt };
+}
+// Save on the definition sheet: the word becomes a passage and the definition
+// stays up. Only a book that is in no journal yet interrupts, once, to ask
+// where it should be collected.
+function saveDictWord() {
+  const pending = pendingSelection;
+  const result = capturePassage({ highlight: lastStyle().highlight, underline: null }, { keepSelection: true });
+  if (!result) return;
+  if (result.prompt) { openPassageSheet(result.passage.id, "file"); return; }
+  pending.savedId = result.passage.id;
+  const button = els.dictPopover.querySelector(".dict-save");
+  if (button) { button.textContent = "Saved"; button.disabled = true; }
+}
+
+// Drawing. foliate hands back the passage's range; the mark is built from the
+// rectangles of its text, line by line, so a highlight covers the words and not
+// the whole block of any paragraph the range happens to enclose.
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs = {}) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value);
+  return el;
+}
+function lineRects(range) {
+  const doc = range.startContainer.ownerDocument;
+  const found = [];
+  const add = (node) => {
+    const r = doc.createRange();
+    r.selectNodeContents(node);
+    if (node === range.startContainer) r.setStart(node, range.startOffset);
+    if (node === range.endContainer) r.setEnd(node, range.endOffset);
+    for (const rect of r.getClientRects()) if (rect.width > 0.5 && rect.height > 0.5) found.push(rect);
+  };
+  const root = range.commonAncestorContainer;
+  if (root.nodeType === 3) add(root);
+  else {
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) if (range.intersectsNode(node)) add(node);
+  }
+  // Join the pieces of one line (a word in italics is its own rectangle) so the
+  // highlight is one clean bar and an underline doesn't break mid-line.
+  const lines = [];
+  for (const r of found) {
+    const line = lines.find((l) =>
+      Math.min(l.bottom, r.bottom) - Math.max(l.top, r.top) > Math.min(l.bottom - l.top, r.height) * 0.6
+      && r.left <= l.right + 3 && r.right >= l.left - 3);
+    if (line) {
+      line.left = Math.min(line.left, r.left); line.right = Math.max(line.right, r.right);
+      line.top = Math.min(line.top, r.top); line.bottom = Math.max(line.bottom, r.bottom);
+    } else lines.push({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+  }
+  return lines;
+}
+function underlineEl(style, r, ink) {
+  const y = r.bottom - 1.5;
+  const line = (at, attrs = {}) => svgEl("line", { x1: r.left, x2: r.right, y1: at, y2: at, stroke: ink, "stroke-width": 2, ...attrs });
+  if (style === "dashed") return line(y, { "stroke-dasharray": "7 4" });
+  if (style === "dotted") return line(y, { "stroke-width": 2.5, "stroke-dasharray": "0.1 5", "stroke-linecap": "round" });
+  if (style === "double") {
+    const g = svgEl("g");
+    g.append(line(y + 0.5, { "stroke-width": 1.25 }), line(y - 2.5, { "stroke-width": 1.25 }));
+    return g;
+  }
+  if (style === "wavy") {
+    const half = 3.5, waves = Math.max(1, Math.round((r.right - r.left) / (half * 2)));
+    const step = (r.right - r.left) / (waves * 2);
+    let d = `M${r.left} ${y}`;
+    for (let i = 0; i < waves * 2; i++) d += ` q${step / 2} ${i % 2 ? 2.5 : -2.5} ${step} 0`;
+    return svgEl("path", { d, fill: "none", stroke: ink, "stroke-width": 1.5 });
+  }
+  return line(y);
+}
+// Blending lets the tint sit behind the text instead of over it. On a white
+// page it is multiplied, so the letters stay black. On a black page a tint dark
+// enough to leave white letters readable cannot be seen at all on e-ink, so the
+// passage is inverted instead: "difference" turns the black page under the mark
+// into the same light tint and the white letters dark. Without blending, fall
+// back to a translucent wash.
+const CAN_BLEND = typeof CSS !== "undefined" && CSS.supports?.("mix-blend-mode", "multiply") && CSS.supports?.("mix-blend-mode", "difference");
+function passageMark(_rects, { id, doc, range }) {
+  const g = svgEl("g");
+  let rects = [];
+  try { rects = lineRects(range); } catch {}
+  markRects.set(id, { doc, rects });
+  const p = store.passage(id);
+  if (!p) return g;
+  const dark = readerSettings.theme === "dark";
+  const highlight = store.highlightById(p.style?.highlight);
+  if (highlight) {
+    const fill = svgEl("g", { fill: highlight.color });
+    if (CAN_BLEND) fill.style.mixBlendMode = dark ? "difference" : "multiply";
+    else fill.style.opacity = dark ? "0.6" : "0.4";
+    for (const r of rects) fill.append(svgEl("rect", { x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top }));
+    g.append(fill);
+  }
+  if (store.underlineById(p.style?.underline)) {
+    // Ink against whatever is behind it: white on the bare black page, black
+    // everywhere else, including on a highlight in the dark theme.
+    const ink = dark && !highlight ? "#fff" : "#000";
+    for (const r of rects) g.append(underlineEl(p.style.underline, r, ink));
+  }
+  return g;
+}
+function bookPassages() {
+  return currentBook ? store.passagesForBook(store.bookKey(currentBook)).filter((p) => p.source?.cfi) : [];
+}
+function drawMark(p) {
+  drawnMarks.set(p.id, { cfi: p.source.cfi, sig: JSON.stringify(p.style || {}) });
+  Promise.resolve().then(() => readerView?.addAnnotation({ value: p.source.cfi, id: p.id })).catch(() => {});
+}
+function drawSectionMarks(index) {
+  // Rectangles recorded for a section that has since been unloaded are dead.
+  for (const [id, mark] of markRects) if (!mark.doc?.defaultView) markRects.delete(id);
+  for (const p of bookPassages()) {
+    let section = null;
+    try { section = readerView.resolveCFI(p.source.cfi)?.index; } catch {}
+    if (section === index) drawMark(p);
+  }
+}
+// Bring the page in line with the store: draw what is new or restyled, remove
+// what is gone. Runs on every change, local or from another device.
+function syncMarks() {
+  if (!readerView || !currentBook) return;
+  const wanted = new Map(bookPassages().map((p) => [p.id, p]));
+  const erased = new Set();
+  for (const [id, drawn] of drawnMarks) {
+    if (wanted.get(id)?.source.cfi === drawn.cfi) continue;
+    drawnMarks.delete(id);
+    markRects.delete(id);
+    erased.add(drawn.cfi);
+    Promise.resolve().then(() => readerView?.deleteAnnotation({ value: drawn.cfi })).catch(() => {});
+  }
+  for (const [id, p] of wanted) {
+    // foliate keys a mark by its CFI. Two devices can each mark the very same
+    // range, so erasing one passage's mark may have erased another's with it.
+    if (erased.has(p.source.cfi) || drawnMarks.get(id)?.sig !== JSON.stringify(p.style || {})) drawMark(p);
+  }
+}
+// The passage under a point of a loaded section, if any. Where marks overlap,
+// the smaller one wins: it is the one that can't be reached any other way.
+function passageAt(doc, x, y) {
+  let best = null, bestArea = Infinity;
+  for (const [id, mark] of markRects) {
+    if (mark.doc !== doc) continue;
+    if (!mark.rects.some((r) => x >= r.left && x <= r.right && y >= r.top - 2 && y <= r.bottom + 2)) continue;
+    const area = mark.rects.reduce((sum, r) => sum + (r.right - r.left) * (r.bottom - r.top), 0);
+    const p = store.passage(id);
+    if (p && area < bestArea) { best = p; bestArea = area; }
+  }
+  return best;
+}
+
+// The sheet.
+const SHEET_TOOLS = [["highlight", "Highlight"], ["underline", "Underline"], ["tag", "Tag"], ["note", "Note"]];
+function openSelectionBar() {
+  closePassageSheet();
+  passageSheet = { mode: "new" };
+  const text = pendingSelection.text;
+  els.passageSheet.innerHTML = `<div class="ps-head"><div class="ps-quote">${escapeHtml(text.length > 140 ? `${text.slice(0, 140).trimEnd()}…` : text)}</div></div>` +
+    `<div class="ps-bar">${SHEET_TOOLS.map(([tool, label]) => `<button type="button" data-ps-new="${tool}">${label}</button>`).join("")}</div>`;
+  els.passageSheet.classList.remove("hidden", "editing");
+}
+function captureFromBar(tool) {
+  const last = lastStyle();
+  const style = tool === "underline" ? { highlight: null, underline: last.underline } : { highlight: last.highlight, underline: null };
+  const result = capturePassage(style);
+  if (!result) { closePassageSheet(); return; }
+  // Already a passage: show it, as a tap on its mark would.
+  if (!result.created) { openPassageView(result.passage.id); return; }
+  // An uncovered book asks where to file first, then carries on to the tool
+  // that was tapped.
+  if (result.prompt) openPassageSheet(result.passage.id, "file", { then: tool });
+  else openPassageSheet(result.passage.id, tool, { notice: result.first ? `Saved to ${result.first.name}.` : "" });
+}
+// A passage made earlier opens to be read, not edited: its text and note, the
+// way to it in its journal, and "Edit annotation" for the tools. Editing is one
+// more tap away, so that a stray tap on a mark can't restyle or delete it.
+function openPassageView(id) {
+  closeReaderSheets();
+  if (!store.passage(id)) return;
+  passageSheet = { mode: "view", id };
+  els.passageSheet.innerHTML = `<div class="ps-head"><div class="ps-quote"></div><button type="button" class="ps-close" data-ps-close>Done</button></div>` +
+    `<div class="ps-note"></div><div class="ps-bar"></div><div class="ps-status"></div>`;
+  els.passageSheet.classList.remove("hidden", "editing");
+  updatePassageSheet();
+}
+function passageJournalNames(p) { return store.journalIdsOf(p).map((id) => store.journal(id).name); }
+function updatePassageView(p) {
+  const set = (el, html) => { if (el.innerHTML !== html) el.innerHTML = html; };
+  set(els.passageSheet.querySelector(".ps-quote"), quoteHtml(p, 140));
+  els.passageSheet.querySelector(".ps-note").textContent = p.note || "";
+  // One way in per journal the passage is in; Unfiled when it is in none.
+  const ids = store.journalIdsOf(p);
+  const links = !ids.length ? [[UNFILED, "View in Unfiled"]]
+    : ids.length === 1 ? [[ids[0], "View in journal"]]
+    : ids.map((id) => [id, `View in ${store.journal(id).name}`]);
+  set(els.passageSheet.querySelector(".ps-bar"),
+    links.map(([id, label]) => `<button type="button" data-ps-journal="${escapeHtml(id)}">${escapeHtml(label)}</button>`).join("") +
+    `<button type="button" data-ps-edit>Edit annotation</button>`);
+  const names = passageJournalNames(p);
+  const details = [names.length ? `In ${names.join(", ")}` : "Unfiled", store.styleLabel(p.style), ...(p.tags || []).map((t) => `#${t}`)];
+  els.passageSheet.querySelector(".ps-status").textContent = details.filter(Boolean).join(" · ");
+}
+// The journal opens over the page, on this passage. The book stays open
+// underneath, at the same place, and going back uncovers it.
+function viewInJournal(passageId, journalId) {
+  closePassageSheet();
+  closeReaderPopups();
+  openJournal(journalId, { focus: passageId, overReader: true });
+}
+function openPassageSheet(id, tool = null, { notice = "", then = null } = {}) {
+  closeReaderSheets();
+  if (!store.passage(id)) return;
+  passageSheet = { mode: "edit", id, tool: null, handle: null, notice, then };
+  els.passageSheet.innerHTML = `<div class="ps-head"><div class="ps-quote"></div><button type="button" class="ps-close" data-ps-close>Done</button></div>` +
+    `<div class="ps-bar">${SHEET_TOOLS.map(([name]) => `<button type="button" data-ps-tool="${name}"></button>`).join("")}<button type="button" data-ps-delete>Delete</button></div>` +
+    `<div class="ps-panel hidden"></div><div class="ps-status"></div>`;
+  els.passageSheet.classList.remove("hidden", "editing");
+  updatePassageSheet();
+  if (tool) setSheetTool(tool);
+}
+function closePassageSheet() {
+  const sheet = passageSheet;
+  if (!sheet) return;
+  const hadFocus = els.passageSheet.contains(document.activeElement);
+  passageSheet = null;
+  sheet.handle?.commit?.();
+  els.passageSheet.classList.add("hidden");
+  els.passageSheet.classList.remove("editing");
+  els.passageSheet.innerHTML = "";
+  // Hand the keyboard back to the book, or hardware page-turn keys go nowhere.
+  if (hadFocus) { try { readerView?.renderer?.focusView?.(); } catch {} }
+}
+// Refresh the sheet's labels in place. The buttons themselves are never
+// replaced, so a change landing mid-tap can't swallow the tap.
+function updatePassageSheet() {
+  const sheet = passageSheet;
+  if (!sheet || sheet.mode === "new") return;
+  const p = store.passage(sheet.id);
+  if (!p) { closePassageSheet(); return; }
+  if (sheet.mode === "view") { updatePassageView(p); return; }
+  const h = store.highlightById(p.style?.highlight), u = store.underlineById(p.style?.underline);
+  const labels = {
+    highlight: h ? `<span class="ps-swatch" style="background:${h.color}"></span>${escapeHtml(h.label)}` : "Highlight",
+    underline: u ? `<span class="ps-line ul-${u.id}">${escapeHtml(u.label)}</span>` : "Underline",
+    tag: (p.tags || []).length ? `Tags (${p.tags.length})` : "Tag",
+    note: p.note ? "Note ✓" : "Note",
+  };
+  const set = (el, html) => { if (el.innerHTML !== html) el.innerHTML = html; };
+  set(els.passageSheet.querySelector(".ps-quote"), quoteHtml(p, 140));
+  for (const button of els.passageSheet.querySelectorAll("[data-ps-tool]")) {
+    set(button, labels[button.dataset.psTool]);
+    button.classList.toggle("active", button.dataset.psTool === sheet.tool);
+    button.setAttribute("aria-pressed", String(button.dataset.psTool === sheet.tool));
+  }
+  const names = passageJournalNames(p);
+  els.passageSheet.querySelector(".ps-status").textContent = sheet.notice || (names.length ? `In ${names.join(", ")}` : "Unfiled");
+}
+function setSheetTool(tool) {
+  const sheet = passageSheet;
+  if (sheet?.mode !== "edit") return;
+  const panel = els.passageSheet.querySelector(".ps-panel");
+  sheet.handle?.commit?.();
+  sheet.handle = null;
+  sheet.tool = tool;
+  panel.replaceChildren();
+  panel.classList.toggle("hidden", !tool);
+  // The tools that bring up a keyboard move the sheet to the top of the
+  // screen, where the keyboard can't cover it.
+  els.passageSheet.classList.toggle("editing", tool === "tag" || tool === "note");
+  if (tool === "highlight" || tool === "underline") sheet.handle = mountStyleTool(panel, sheet.id, [tool]);
+  else if (tool === "tag") sheet.handle = mountTagTool(panel, sheet.id);
+  else if (tool === "note") sheet.handle = mountNoteTool(panel, sheet.id, () => { if (passageSheet === sheet) setSheetTool(null); });
+  else if (tool === "file") {
+    sheet.handle = mountFilingTool(panel, sheet.id, currentBook, () => {
+      if (passageSheet !== sheet) return;
+      const next = sheet.then;
+      sheet.then = null;
+      setSheetTool(next);
+    });
+  }
+  updatePassageSheet();
+  sheet.handle?.focus?.();
+}
+els.passageSheet.addEventListener("click", (e) => {
+  const fresh = e.target.closest("[data-ps-new]"), tool = e.target.closest("[data-ps-tool]"), journal = e.target.closest("[data-ps-journal]");
+  if (fresh) captureFromBar(fresh.dataset.psNew);
+  else if (journal && passageSheet?.id) viewInJournal(passageSheet.id, journal.dataset.psJournal);
+  else if (e.target.closest("[data-ps-edit]") && passageSheet?.id) openPassageSheet(passageSheet.id);
+  else if (tool) setSheetTool(passageSheet?.tool === tool.dataset.psTool ? null : tool.dataset.psTool);
+  else if (e.target.closest("[data-ps-close]")) closePassageSheet();
+  else if (e.target.closest("[data-ps-delete]") && passageSheet?.id) {
+    if (!confirm("Delete this passage?\n\nIt is removed from every journal and from the book.")) return;
+    const id = passageSheet.id;
+    closePassageSheet();
+    store.deletePassage(id);
+  }
+});
+
+// ---- Passages tab ------------------------------------------------------
+// Beside Chapters and Bookmarks. "This book" lists its passages in page order;
+// "Journal" lists everything in the journals this book belongs to, across
+// books, so a passage from an earlier volume is one tap away mid-read.
+function setPassagesPolling(on) {
+  if (on === passagesPolling) return;
+  passagesPolling = on;
+  if (on) store.startPolling(); else store.stopPolling();
+}
+function comparePassagesInBook(a, b) {
+  try { return CFI.compare(a.source.cfi, b.source.cfi); }
+  catch { return (Number(a.source?.percent) || 0) - (Number(b.source?.percent) || 0); }
+}
+// The journals this book belongs to: those that collect from it now, and any
+// that still hold passages from when they did.
+function panelJournalIds() {
+  const ids = new Set(store.journalsCovering(currentBook).map((j) => j.id));
+  for (const p of bookPassages()) for (const id of store.journalIdsOf(p)) ids.add(id);
+  return [...ids];
+}
+function panelJournalPassages() {
+  const ids = panelJournalIds();
+  return store.passages().filter((p) => store.journalIdsOf(p).some((id) => ids.includes(id)));
+}
+function panelPassages() {
+  if (passagesScope === "book") return bookPassages().sort(comparePassagesInBook);
+  const key = store.bookKey(currentBook), query = els.passagesSearch.value, tag = els.passagesTag.value;
+  return panelJournalPassages()
+    .filter((p) => store.matchesQuery(p, query) && (!tag || store.hasTag(p, tag)))
+    .sort((a, b) => {
+      const ka = a.source?.book_key, kb = b.source?.book_key;
+      if (ka === kb) return comparePassagesInBook(a, b);
+      // The open book first, then the others by title.
+      if (ka === key || kb === key) return ka === key ? -1 : 1;
+      return String(a.source?.title || "").localeCompare(String(b.source?.title || ""), undefined, { sensitivity: "base" });
+    });
+}
+function renderPassagesPanel() {
+  if (!currentBook) return;
+  const journalScope = passagesScope === "journal";
+  els.passagesScopeBook.classList.toggle("active", !journalScope);
+  els.passagesScopeJournal.classList.toggle("active", journalScope);
+  els.passagesScopeBook.setAttribute("aria-pressed", String(!journalScope));
+  els.passagesScopeJournal.setAttribute("aria-pressed", String(journalScope));
+  els.passagesSearch.classList.toggle("hidden", !journalScope);
+  els.passagesTag.classList.toggle("hidden", !journalScope);
+  if (journalScope && document.activeElement !== els.passagesTag) {
+    const tags = store.tagsOf(panelJournalPassages()), current = els.passagesTag.value;
+    els.passagesTag.innerHTML = `<option value="">All tags</option>` + tags.map((t) => `<option value="${escapeHtml(t.tag)}">${escapeHtml(t.tag)} (${t.count})</option>`).join("");
+    els.passagesTag.value = tags.some((t) => t.tag === current) ? current : "";
+  }
+  const key = store.bookKey(currentBook);
+  const list = panelPassages();
+  if (!list.length) {
+    const message = !journalScope ? "No passages yet. Select some text on a page to highlight it."
+      : !panelJournalIds().length ? "This book isn't in a journal yet."
+      : "No passages match.";
+    els.passagesList.innerHTML = `<div class="bookmarks-empty">${message}</div>`;
+    return;
+  }
+  els.passagesList.innerHTML = list.map((p) => {
+    const s = p.source || {};
+    const meta = [s.book_key !== key ? s.title : "", s.chapter, `${Math.round((Number(s.percent) || 0) * 100)}% through`, store.styleLabel(p.style), ...(p.tags || []).map((t) => `#${t}`)];
+    return `<button class="toc-item passage-item" data-passage-id="${escapeHtml(p.id)}"><span class="passage-item-quote">${quoteHtml(p, 220)}</span>` +
+      `${p.note ? `<span class="passage-item-note">${escapeHtml(p.note)}</span>` : ""}<span class="bookmark-item-meta">${meta.filter(Boolean).map(escapeHtml).join(" · ")}</span></button>`;
+  }).join("");
+}
+function setPassagesScope(scope) {
+  passagesScope = scope === "journal" ? "journal" : "book";
+  renderPassagesPanel();
+  els.passagesList.scrollTop = 0;
+}
+els.passagesScopeBook.addEventListener("click", () => setPassagesScope("book"));
+els.passagesScopeJournal.addEventListener("click", () => setPassagesScope("journal"));
+let passagesSearchTimer = null;
+els.passagesSearch.addEventListener("input", () => {
+  clearTimeout(passagesSearchTimer);
+  passagesSearchTimer = setTimeout(renderPassagesPanel, 120);
+});
+els.passagesTag.addEventListener("change", renderPassagesPanel);
+els.passagesList.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-passage-id]");
+  const p = b && store.passage(b.dataset.passageId);
+  if (!p || !readerView || !currentBook) return;
+  // A visit either way: looking up a passage is not reading on from it, even
+  // when it is in the book that is open.
+  if (p.source?.book_key === store.bookKey(currentBook)) { closeTocView(); visitInOpenBook(p, false); }
+  else visitPassage(p);
+});
+
+// ---- Visits ------------------------------------------------------------
+// Journal to book. The book opens at the passage and nothing about the visit is
+// saved: the reader's place in that book and whether it is finished are exactly
+// as they were. "Go to my place" turns the visit into ordinary reading from the
+// saved place; backing out returns to the journal, and to the page that was
+// open if the journal was consulted from inside a book. That holds when the
+// passage is in the very book being read: going to look at it must not become
+// the reader's place.
+function visitPassage(passage) {
+  const book = store.findBook(passage, allBooks);
+  if (!book) { alert("This book is no longer in the library, so the passage can't open its page."); return; }
+  const viaJournal = journalOverReader();
+  // The visit shows on top; the journal waits underneath for "Back to journal".
+  if (viaJournal) lowerJournal();
+  if (readerView && currentBook && store.bookKey(currentBook) === passage.source?.book_key) {
+    visitInOpenBook(passage, viaJournal);
+    return;
+  }
+  // A visit made from within a visit keeps the original way back.
+  const fromBook = visit ? visit.fromBook : currentBook;
+  openReader(book, { passage, fromBook: fromBook || null, viaJournal: viaJournal || !!visit?.viaJournal });
+}
+// A passage in the book that is already open. No book to switch to: the visit
+// starts where the reader is, remembering the page to return to.
+function visitInOpenBook(passage, viaJournal) {
+  // Already visiting (this book from another, or another passage a moment
+  // ago): the way back stays as it was.
+  visit = visit
+    ? { ...visit, passage, viaJournal: viaJournal || visit.viaJournal }
+    : { passage, fromBook: null, viaJournal, returnCfi: currentLocation.cfi || progress.books[currentBook.id]?.cfi || null };
+  updateVisitBar();
+  readerView.goTo(passage.source.cfi);
+}
+function updateVisitBar() {
+  els.visitBar.classList.toggle("hidden", !visit);
+  if (!visit) return;
+  els.visitLabel.textContent = visit.returnCfi !== undefined ? "Visiting a passage"
+    : `Visiting ${currentBook?.title || visit.passage.source?.title || "a passage"}`;
+}
+// Back to the journal as it was consulted: the journal view over the page, or
+// the reader's own Passages tab.
+function reopenJournal(viaJournal) {
+  if (viaJournal) raiseJournal();
+  else openTocView("passages");
+}
+function leaveReader() {
+  if (!visit) { closeReader(); return; }
+  const { fromBook, viaJournal } = visit;
+  // Within the open book: back to the page that was being read.
+  if (visit.returnCfi !== undefined) { goToMyPlace().then(() => reopenJournal(viaJournal)); return; }
+  if (!fromBook) { closeReader(); return; }
+  // Back to the book that was open.
+  openReader(fromBook).then(() => {
+    if (!viaJournal) passagesScope = "journal";
+    reopenJournal(viaJournal);
+  });
+}
+async function goToMyPlace() {
+  if (!visit || !readerView || !currentBook) return;
+  const saved = visit.returnCfi || progress.books[currentBook.id]?.cfi;
+  // Hold saving until the reader has arrived, so the passage's page isn't
+  // recorded as the place on the way there.
+  readerReady = false;
+  visit = null;
+  updateVisitBar();
+  try {
+    if (saved) await readerView.goTo(saved);
+    else await readerView.goToTextStart();
+  } catch {}
+  readerReady = true;
+}
+// Offline, a visit needs the book on this device. Its absence is not an error
+// worth alarming anyone over, and the passage is still readable in the journal.
+function showVisitUnavailable() {
+  els.readerLoading.innerHTML = `<div class="visit-unavailable"><p>This book isn't on this device.</p><p>Did you sync the book to this device with Syncthing?</p><p class="visit-unavailable-note">The passage itself is still in your journal.</p><button type="button" class="btn">Back to journal</button></div>`;
+  els.readerLoading.querySelector("button").addEventListener("click", leaveReader);
+}
+els.visitBack.addEventListener("click", leaveReader);
+els.visitPlace.addEventListener("click", () => {
+  const viaJournal = !!visit?.viaJournal;
+  goToMyPlace().then(() => { if (viaJournal) dismissLoweredJournal(); });
+});
+
+// A journal or passage changed, here or on another device.
+function onJournalChange() {
+  syncMarks();
+  updatePassageSheet();
+  if (tocTab === "passages" && !els.tocView.classList.contains("hidden") && document.activeElement !== els.passagesSearch) renderPassagesPanel();
+}
 // Tapping the reader chrome (toolbar, edges) outside the popover dismisses it.
 // Taps inside the book are handled by the per-document selection listener.
 document.addEventListener("pointerdown", (e) => {
   if (!els.dictPopover.classList.contains("hidden") && !els.dictPopover.contains(e.target)) closeDictPopover();
+  if (passageSheet && !els.passageSheet.contains(e.target)) closePassageSheet();
   if (!els.readerFonts.classList.contains("hidden") && !els.readerFonts.contains(e.target) && !e.target.closest('[data-role="font-menu"]')) closeReaderFontMenu();
   if (!els.readerRefreshPanel.classList.contains("hidden") && !els.readerRefreshPanel.contains(e.target) && !e.target.closest("#reader-refresh")) closeReaderRefreshMenu();
 });
-els.readerClose.addEventListener("click", closeReader);
+els.readerClose.addEventListener("click", leaveReader);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshOpenReaderProgress(); });
 window.addEventListener("focus", refreshOpenReaderProgress);
 els.tocToggle.addEventListener("click", openTocView);
@@ -1633,6 +2263,7 @@ els.readerCollapse.addEventListener("click", hideReaderChrome);
 els.tocBack.addEventListener("click", closeTocView);
 els.tocContentsTab.addEventListener("click", () => setTocTab("contents"));
 els.tocBookmarksTab.addEventListener("click", () => setTocTab("bookmarks"));
+els.tocPassagesTab.addEventListener("click", () => setTocTab("passages"));
 els.tocList.addEventListener("click", (e) => { const b = e.target.closest("button[data-href]"); if (b && readerView) { readerView.goTo(b.dataset.href); closeTocView(); } });
 els.bookmarksList.addEventListener("click", (e) => { const b = e.target.closest("button[data-cfi]"); if (b && readerView) { readerView.goTo(b.dataset.cfi); closeTocView(); } });
 els.readerTheme.addEventListener("click", () => { readerSettings.theme = readerSettings.theme === "dark" ? "light" : "dark"; saveReaderSettings(); applyReaderTheme(); });
@@ -1690,8 +2321,19 @@ updateFullscreenButton();
 function scheduleReaderRelayout() {
   if (!readerView) return;
   clearTimeout(readerResizeTimer);
+  // A soft keyboard resizes the window. Re-paginating the book behind a note
+  // that is being typed would flash an e-ink screen on every keystroke's worth
+  // of layout; wait until the field is left.
+  if (typingInReader()) { relayoutHeld = true; return; }
+  relayoutHeld = false;
   readerResizeTimer = setTimeout(applyReaderTheme, 120);
 }
+let relayoutHeld = false;
+function typingInReader() {
+  const active = document.activeElement;
+  return !!active && els.reader.contains(active) && /^(INPUT|TEXTAREA)$/.test(active.tagName);
+}
+els.reader.addEventListener("focusout", () => setTimeout(() => { if (relayoutHeld && !typingInReader()) scheduleReaderRelayout(); }, 0));
 window.addEventListener("resize", scheduleReaderRelayout);
 // The reader unhides from display:none, so the viewer often measures 0px on the
 // first render — foliate then lays the text into a zero-width column and the
@@ -1701,20 +2343,27 @@ window.addEventListener("resize", scheduleReaderRelayout);
 if ("ResizeObserver" in window) {
   new ResizeObserver(scheduleReaderRelayout).observe(els.viewer);
 }
-function readerNext() { if (readerView) readerView.goRight(); }
-function readerPrev() { if (readerView) readerView.goLeft(); }
+function readerNext() { if (readerView) { closePassageSheet(); readerView.goRight(); } }
+function readerPrev() { if (readerView) { closePassageSheet(); readerView.goLeft(); } }
 // Hook a native wrapper (e.g. an Android WebView that captures the BOOX volume
 // buttons) can call: window.ebookTurnPage('next' | 'prev').
-window.ebookTurnPage = (dir) => { if (readerView) (dir === "prev" ? readerPrev() : readerNext()); };
+window.ebookTurnPage = (dir) => { if (readerView && !journalOverReader()) (dir === "prev" ? readerPrev() : readerNext()); };
 
 // Page-turn keys. We accept the usual e-reader keys (arrows, PageUp/Down, space)
 // plus the volume keycodes — so whatever a BOOX button remap or wrapper emits,
 // the reader turns the page. (Chrome itself does NOT deliver volume keys to a
 // web page; those branches only fire if something forwards a real key event.)
 function handleReaderKey(e) {
-  if (!readerView) return;
+  // With the journal over the page, keys are the journal's.
+  if (!readerView || journalOverReader()) return;
   const tocOpen = !els.tocView.classList.contains("hidden");
-  if (e.key === "Escape") { e.preventDefault(); return tocOpen ? closeTocView() : closeReader(); }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    if (readerSheetOpen()) return closeReaderSheets();
+    return tocOpen ? closeTocView() : leaveReader();
+  }
+  // Keys typed into a note, a tag or a search box are text, not page turns.
+  if (e.target?.closest?.("input, textarea, select")) return;
   if (tocOpen) return; // don't page through the book while the contents view is up
   const k = e.key, code = e.keyCode || e.which;
   if (k === "ArrowRight" || k === "PageDown" || k === " " || k === "Spacebar" || k === "AudioVolumeDown" || code === 25) { e.preventDefault(); return readerNext(); }
@@ -1869,6 +2518,8 @@ updateLibControls();
 applyReaderTheme();
 loadIrcStatus().then(loadStaging);
 loadLibrary();
+initJournals({ books: () => allBooks, visit: visitPassage, isHome: libIsHome, layout: () => libView.view });
+store.subscribe(onJournalChange);
 checkForAppUpdate();
 
 // Register the service worker so the app is installable as a PWA.

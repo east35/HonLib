@@ -5,7 +5,8 @@
 A self-hosted ebook library and reader you run with Docker. Browse your epub
 collection in the browser, read in a clean paginated reader
 ([foliate-js](https://github.com/johnfactotum/foliate-js)) with themes, fonts,
-tap-to-define dictionary lookup, bookmarks, and progress that syncs across devices.
+tap-to-define dictionary lookup, bookmarks, highlights collected into journals,
+and progress that syncs across devices.
 
 Licensed [AGPL-3.0](LICENSE).
 
@@ -21,10 +22,12 @@ I tried KOReader first. It's powerful, but it's built for people who want to
 tune every setting. I just wanted to read. So HonLib is the opposite bet: a
 simple, self-hosted library and reader that works the same everywhere.
 
-HonLib doesn't sync anything itself — that's not its job. Point it at a local
+HonLib doesn't sync your books — that's not its job. Point it at a local
 folder and it reads from disk; keeping that folder up to date is whatever
 syncing tool you already use (Syncthing, Dropbox, a NAS share, whatever).
-HonLib just notices when the files are there. The companion
+HonLib just notices when the files are there. What it does carry between
+devices is what you do with the books: your place, your bookmarks, and your
+highlights and journals. The companion
 [Android reader](https://github.com/east35/lib-sdk) takes the same posture on
 the device side: read from local storage if the file is present, fall back to
 the server otherwise.
@@ -83,6 +86,9 @@ reader behavior consistent.
 - **Progress sync** — your place in each book follows you between devices.
 - **Bookmarks** — save exact page positions and return to them from the reader's
   Chapters / Bookmarks view.
+- **Highlights and journals** — highlight or underline a passage and it lands in
+  a journal that collects across books, series and authors, with notes, tags,
+  search and Markdown export (see [Highlights and journals](#highlights-and-journals)).
 - **Installable** — works as a PWA you can add to a phone or tablet home screen.
 - **Plugin-friendly** — optional acquisition and Android wrapper modules can be
   added as git submodules (see [Optional modules](#optional-modules)).
@@ -108,6 +114,7 @@ By default the app stores everything next to the compose file:
 
 - `./data/books`   — your library; drop `.epub` files here
 - `./data/staging` — in-progress downloads (used by the optional acquisition plugin)
+- `./data/journal` — highlights, notes and journals (keep this!)
 - `./config`       — secret key, reading progress, and caches (keep this!)
 
 To point at an existing library folder, copy `.env.example` to `.env` and set
@@ -150,6 +157,63 @@ Need to fix a title, author, or series for a book that's already been ingested?
 Drop the file back into `data/staging/` and use the Staging panel to edit the
 metadata before re-importing.
 
+## Highlights and journals
+
+Select a phrase while reading and an annotation bar offers **Highlight**,
+**Underline**, **Tag** and **Note**. Select a single word and you get its
+definition as before, with a **Save** button. Either way the passage is saved
+the moment you make it. Tap a mark later and it shows you the passage and its
+note, with **View in journal** (the journal opens over the page, on that
+passage) and **Edit annotation** (the tools, to restyle, retag or delete it).
+
+- **Styles** — a passage can have a highlight colour (yellow, green, blue, pink,
+  orange), an underline style (solid, dashed, dotted, wavy, double), or both.
+  Colours are true colours on every device, and every swatch and every saved
+  passage also carries its colour's name, so nothing depends on telling tints
+  apart on a grayscale screen.
+- **Journals** — a journal sits on the home page like a book, but opens as a
+  list of passages you can search and filter. Each journal has *sources*: single
+  books, whole series, or whole authors (series and authors include books you
+  add later). A highlight goes into every journal that covers its book. The
+  first highlight you ever make creates "My First Journal"; a highlight in a
+  book no journal covers is saved and you're offered a journal for it, or it
+  waits in **Unfiled**.
+- **Passages keep themselves** — each one carries its text, your note and tags,
+  and a snapshot of where it came from, so it survives the book being deleted.
+  A passage whose book is still in the library but no longer a source of the
+  journal is marked *Source off*; one whose book is gone is marked *Book
+  missing*.
+- **Between journal and book** — *Visit in book* opens the book at the passage
+  without touching your saved place or finished status; *Back to journal* and
+  *Go to my place* take you out. From inside a book, the **Passages** tab (beside
+  Chapters and Bookmarks) lists this book's passages or the whole journal.
+- **Export** — journal settings can download the journal as Markdown.
+
+### Where annotations live
+
+One small JSON file per passage and per journal, under `EBOOK_LIB_JOURNAL_DIR`
+(`./data/journal` by default). Nothing is written into an EPUB or into the
+books folder.
+
+```
+data/journal/
+├── journals/<journal-id>.json
+└── passages/<passage-id>.json
+```
+
+Devices send each change to the server as they make it, and an open journal
+checks for changes every few seconds, so a passage captured on an e-reader
+shows up on a tablet within moments. Two devices changing the same passage are
+settled by whichever change is newer; changes to different passages never
+conflict. A delete is recorded as a marker in the file rather than by removing
+it, which is how other devices learn of it.
+
+Syncthing is not required, but the folder is safe to sync with it as a second
+route: files that appear or change there are picked up, and a Syncthing
+conflict copy is settled by the same newest-wins rule. A search index is kept
+in the config folder (`journal-index.sqlite`); it is rebuilt from the files and
+can be deleted at any time.
+
 ## Configuration
 
 All settings are environment variables, documented in `.env.example`. The most
@@ -159,6 +223,7 @@ common ones:
 | ------------------------- | ---------------- | ------------------------------------------------ |
 | `EBOOK_LIB_BOOKS_DIR`     | `./data/books`   | Host folder holding your epubs                   |
 | `EBOOK_LIB_STAGING_DIR`   | `./data/staging` | Where downloads land before import               |
+| `EBOOK_LIB_JOURNAL_DIR`   | `./data/journal` | Where highlights, notes and journals are stored  |
 | `EBOOK_LIB_PASSWORD`      | _(empty)_        | Set to enable login. Empty = no auth (LAN only)  |
 | `EBOOK_LIB_USERNAME`      | _(empty)_        | Optional username for login                      |
 | `EBOOK_LIB_COOKIE_SECURE` | _(empty)_        | Set to `1` only when served entirely over HTTPS  |
@@ -236,13 +301,19 @@ git submodule update --init --recursive
 docker compose up -d --build
 ```
 
-Your library and `./config` are untouched by rebuilds.
+Your library, your journals and `./config` are untouched by rebuilds.
+
+If you run HonLib from your own compose file rather than the one in this repo,
+add the journal volume to it (`<host folder>:/data/journal`, with
+`EBOOK_LIB_JOURNAL_DIR=/data/journal`). Without it, annotations are kept in the
+config volume under `journal/` so that a rebuild cannot lose them.
 
 ## Backup
 
-Back up two things:
+Back up three things:
 
 - your books folder (`./data/books` or your `EBOOK_LIB_BOOKS_DIR`)
+- your journal folder (`./data/journal` or your `EBOOK_LIB_JOURNAL_DIR`)
 - `./config` (holds the secret key and reading progress)
 
 ## Bundled fonts
@@ -268,4 +339,15 @@ it. A CSP-stripped negative control must execute the same probe.
 npm install
 npx playwright install chromium webkit
 npm run test:scripted-epub
+```
+
+### Reader and journal tests
+
+The reader's position tracking and the annotation features are tested the same
+way, against a throwaway library of generated EPUBs:
+
+```sh
+pip install -r requirements.txt
+npm run test:reader
+npm run test:journal
 ```
