@@ -154,9 +154,9 @@
     <div class="journal-head">
       <button id="journal-back" class="btn icon-btn" title="Back to library" aria-label="Back to library"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg></button>
       <h2 id="journal-title" class="journal-title"></h2>
-      <button id="journal-settings-toggle" class="btn" type="button" aria-expanded="false">Settings</button>
+      <div id="journal-count" class="journal-count" role="status"></div>
+      <button id="journal-settings-toggle" class="btn" type="button" aria-expanded="false" aria-controls="journal-drawer">Settings</button>
     </div>
-    <div id="journal-settings" class="journal-settings hidden"></div>
     <div id="journal-tools" class="journal-tools">
       <input id="journal-search" type="text" placeholder="Search passages" autocomplete="off" aria-label="Search passages" />
       <select id="journal-filter-tag" aria-label="Filter by tag"></select>
@@ -165,8 +165,15 @@
       <select id="journal-filter-state" aria-label="Filter by status"></select>
       <select id="journal-sort" aria-label="Sort passages"></select>
     </div>
-    <div id="journal-count" class="journal-count" role="status"></div>
     <div id="journal-cards" class="journal-cards"></div>
+    <!-- The library drawer's pattern, for this journal's settings. -->
+    <div id="journal-drawer" class="drawer hidden">
+      <div class="drawer-scrim" data-close-journal-drawer></div>
+      <aside class="drawer-panel" role="dialog" aria-label="Journal settings">
+        <div class="drawer-head"><button class="btn ghost" data-close-journal-drawer aria-label="Close">Close</button></div>
+        <div id="journal-settings" class="drawer-body journal-settings"></div>
+      </aside>
+    </div>
   </div>
 
   <div id="reader" class="reader hidden" tabindex="0">

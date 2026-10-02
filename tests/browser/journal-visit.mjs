@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { chromium, webkit } from "playwright";
 import { baseURL, engines, openBook, settled, turnPage } from "./reader-harness.mjs";
-import { BOOKS, hideChrome, libraryBook, putDoc, tapText, wipeJournals } from "./journal-harness.mjs";
+import { BOOKS, cardMenu, hideChrome, libraryBook, putDoc, tapText, wipeJournals } from "./journal-harness.mjs";
 
 async function progressOf(book) {
   const data = await fetch(`${baseURL}/api/progress`).then((r) => r.json());
@@ -69,7 +69,7 @@ async function visitFromJournal(page, name, { second }) {
 
   await page.goto(baseURL, { waitUntil: "networkidle" });
   await page.locator("#journals .journal-card", { hasText: "Wayfarers" }).click();
-  await page.locator("#journal-cards .passage-card", { hasText: "Two paragraph 1." }).locator('[data-act="visit"]').click();
+  await cardMenu(page.locator("#journal-cards .passage-card", { hasText: "Two paragraph 1." }), "visit");
   await reading(page);
   assert.equal(await page.locator("#visit-bar").isVisible(), true, `${name}: a visit shows no way back`);
   assert.equal(await page.locator("#visit-label").textContent(), `Visiting ${BOOKS.second}`);
@@ -94,7 +94,7 @@ async function visitFromJournal(page, name, { second }) {
   assert.deepEqual(await progressOf(second), before, `${name}: leaving a visit moved the saved place`);
 
   // "Go to my place" turns the visit into reading, from where reading left off.
-  await page.locator("#journal-cards .passage-card", { hasText: "Two paragraph 1." }).locator('[data-act="visit"]').click();
+  await cardMenu(page.locator("#journal-cards .passage-card", { hasText: "Two paragraph 1." }), "visit");
   await reading(page);
   await page.locator("#visit-place").click();
   await page.locator("#visit-bar").waitFor({ state: "hidden" });
@@ -233,7 +233,7 @@ async function visitFromAMark(page, name, { first, second }) {
   assert.equal(await page.locator("#journal-cards .passage-card.focused .passage-quote").textContent(), "One paragraph 0.");
 
   // Another book: a visit, with the open book remembered.
-  await page.locator("#journal-cards .passage-card", { hasText: "Two paragraph 1." }).locator('[data-act="visit"]').click();
+  await cardMenu(page.locator("#journal-cards .passage-card", { hasText: "Two paragraph 1." }), "visit");
   await page.locator("#visit-bar").waitFor({ state: "visible" });
   await reading(page);
   assert.equal(await page.locator("#visit-label").textContent(), `Visiting ${BOOKS.second}`);
@@ -259,7 +259,7 @@ async function visitFromAMark(page, name, { first, second }) {
   const firstBefore = await progressOf(first);
   await tapText(page, "#one-p0", 5);
   await page.locator("#passage-sheet [data-ps-journal]").click();
-  await page.locator("#journal-cards .passage-card", { hasText: "Three paragraph 0." }).locator('[data-act="visit"]').click();
+  await cardMenu(page.locator("#journal-cards .passage-card", { hasText: "Three paragraph 0." }), "visit");
   await page.waitForFunction(() => !document.querySelector("#journal-view").classList.contains("over-reader"));
   await page.waitForFunction(() => document.querySelector("foliate-view")?.lastLocation?.section?.current === 3);
   assert.equal(await page.locator("#visit-bar").isVisible(), true, `${name}: a passage in the open book was not opened as a visit`);
@@ -280,7 +280,7 @@ async function visitWithoutTheBook(context, page, name, { second }) {
   await page.goto(baseURL, { waitUntil: "networkidle" });
   await context.route(`**/api/book/${second.id}/file`, (route) => route.abort());
   await page.locator("#journals .journal-card", { hasText: "Wayfarers" }).click();
-  await page.locator("#journal-cards .passage-card", { hasText: "Two paragraph 1." }).locator('[data-act="visit"]').click();
+  await cardMenu(page.locator("#journal-cards .passage-card", { hasText: "Two paragraph 1." }), "visit");
   const reminder = page.locator("#reader-loading .visit-unavailable");
   await reminder.waitFor();
   assert.match(await reminder.textContent(), /Did you sync the book to this device with Syncthing\?/, `${name}: missing-book reminder changed`);

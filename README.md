@@ -160,11 +160,24 @@ metadata before re-importing.
 ## Highlights and journals
 
 Select a phrase while reading and an annotation bar offers **Highlight**,
-**Underline**, **Tag** and **Note**. Select a single word and you get its
-definition as before, with a **Save** button. Either way the passage is saved
-the moment you make it. Tap a mark later and it shows you the passage and its
-note, with **View in journal** (the journal opens over the page, on that
+**Underline**, **Add tag** and **Add note**. Select a single word and you get
+its definition as before, with a **Save** button. Either way the passage is
+saved the moment you make it. Tap a mark later and it shows you the passage and
+its note, with **View in journal** (the journal opens over the page, on that
 passage) and **Edit annotation** (the tools, to restyle, retag or delete it).
+
+The bar sits beside what you are marking: just over the selection, or under it
+where there is no room above. With text selected, tap a word to end the
+selection there (further on to stretch it, inside it to cut it short), tap a
+word before it to start it there, or drag either end. On a touchscreen the
+reader does the selecting itself: press-and-hold a word, and drag on from there
+to stretch it. The system's handles and its Copy / Share / Select all bar never
+appear, so nothing sits on top of the annotation bar. **Cancel**, or a tap off
+the text, lets the selection go.
+
+The page never turns under a selection. When a passage runs past the foot of
+the page, select to the end of the page and the bar offers **Continue on next
+page**; the page turns, and a tap on the passage's last word finishes it.
 
 - **Styles** — a passage can have a highlight colour (yellow, green, blue, pink,
   orange), an underline style (solid, dashed, dotted, wavy, double), or both.
@@ -172,9 +185,15 @@ passage) and **Edit annotation** (the tools, to restyle, retag or delete it).
   passage also carries its colour's name, so nothing depends on telling tints
   apart on a grayscale screen.
 - **Journals** — a journal sits on the home page like a book, but opens as a
-  list of passages you can search and filter. Each journal has *sources*: single
+  list of passages you can search and filter. On each passage, tap the quote to
+  change its style, the note to edit it, a tag to remove it, and **Add Tag** or
+  **Add Note** where one would be; the **⋯** menu has the rest (add to
+  clipboard, view in book, remove from journal, delete). Each journal has *sources*: single
   books, whole series, or whole authors (series and authors include books you
-  add later). A highlight goes into every journal that covers its book. The
+  add later). A highlight goes into every journal that covers its book, and
+  any one passage can then be kept out of a journal or put into another
+  (**Journals** on its sheet in the reader, **Choose journals** in its menu in a
+  journal). The
   first highlight you ever make creates "My First Journal"; a highlight in a
   book no journal covers is saved and you're offered a journal for it, or it
   waits in **Unfiled**.
@@ -183,7 +202,7 @@ passage) and **Edit annotation** (the tools, to restyle, retag or delete it).
   A passage whose book is still in the library but no longer a source of the
   journal is marked *Source off*; one whose book is gone is marked *Book
   missing*.
-- **Between journal and book** — *Visit in book* opens the book at the passage
+- **Between journal and book** — *View in book* opens the book at the passage
   without touching your saved place or finished status; *Back to journal* and
   *Go to my place* take you out. From inside a book, the **Passages** tab (beside
   Chapters and Bookmarks) lists this book's passages or the whole journal.
