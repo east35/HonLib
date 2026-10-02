@@ -16,7 +16,7 @@ let host = { books: () => [], visit: () => {}, isHome: () => true, layout: () =>
 const els = {
   section: $("#journals-section"), shelf: $("#journals"), newJournal: $("#journal-new"),
   view: $("#journal-view"), title: $("#journal-title"), back: $("#journal-back"),
-  settingsToggle: $("#journal-settings-toggle"), settings: $("#journal-settings"),
+  settingsToggle: $("#journal-settings-toggle"), drawer: $("#journal-drawer"), settings: $("#journal-settings"),
   tools: $("#journal-tools"), search: $("#journal-search"),
   filterTag: $("#journal-filter-tag"), filterBook: $("#journal-filter-book"), filterStyle: $("#journal-filter-style"), filterState: $("#journal-filter-state"), sort: $("#journal-sort"),
   count: $("#journal-count"), cards: $("#journal-cards"),
@@ -69,10 +69,12 @@ export function quoteHtml(p, max = 0) {
 // so a redraw elsewhere never takes the keyboard away mid-word. `commit` saves
 // anything still being typed; whoever unmounts a tool calls it first.
 
-export function mountTagTool(el, passageId) {
+// `chips: false` leaves out the passage's own tags, for a caller that already
+// shows them.
+export function mountTagTool(el, passageId, { chips = true } = {}) {
   const root = document.createElement("div");
   root.className = "tag-tool";
-  root.innerHTML = `<div class="tag-chips" data-tags></div>
+  root.innerHTML = `${chips ? `<div class="tag-chips" data-tags></div>` : ""}
     <form class="tag-form"><input type="text" placeholder="Add a tag" autocomplete="off" autocapitalize="none" maxlength="60" aria-label="Add a tag"><button type="submit" class="btn">Add</button></form>
     <div class="tag-chips" data-suggestions></div>`;
   const input = root.querySelector("input");
@@ -80,7 +82,7 @@ export function mountTagTool(el, passageId) {
     const p = store.passage(passageId);
     if (!p) return;
     const tags = p.tags || [];
-    root.querySelector("[data-tags]").innerHTML = tags.map((t) =>
+    if (chips) root.querySelector("[data-tags]").innerHTML = tags.map((t) =>
       `<button type="button" class="tag-chip on" data-tag-remove="${esc(t)}" aria-label="Remove tag ${esc(t)}">${esc(t)}<span class="tag-chip-x" aria-hidden="true">×</span></button>`).join("");
     const suggestions = store.suggestTags(store.journalIdsOf(p), input.value, tags).slice(0, 14);
     root.querySelector("[data-suggestions]").innerHTML = suggestions.map((t) =>
@@ -325,7 +327,7 @@ const STATE_ICONS = {
   // Book missing: an empty, dashed outline where the book was.
   "book-missing": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14v16H5z" stroke-dasharray="3 3" /><path d="M12 9v4M12 16h.01" /></svg>',
 };
-let view = null;   // { id, query, tag, book, style, state, sort, tool: { passageId, kind, handle } }
+let view = null;   // { id, query, tag, book, style, state, sort, tool: { passageId, kind, handle }, menu: passageId }
 let settingsAsk = null;
 // Set while the journal is shown on top of an open book (reached from a mark
 // on the page). `keepOpen` says it was already open underneath, so going back
@@ -378,27 +380,53 @@ function renderFilters(all) {
   if (els.search.value !== view.query) els.search.value = view.query;
 }
 
-// A card is three parts so each can be kept or replaced on its own: what the
-// passage says (redrawn when it changes), its actions, and a slot for the tool
-// that is open on it. Cards are matched to passages by id and updated in
-// place, so a redraw (a change from another device, say) never closes the note
-// someone is in the middle of writing.
-function cardBodyHtml(p, state) {
+const ICONS = {
+  more: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" /><path d="M18.5 3.5a2.1 2.1 0 0 1 3 3L12 16l-4 1 1-4z" /></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="square" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>',
+  cross: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="square" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>',
+};
+// A card is a heading and a panel. The heading says where the passage is from
+// and how it is marked, and holds the overflow menu: everything done to the
+// passage as a whole (copy, open its page, take it out of the journal, delete
+// it). The panel is the passage itself, and each part of it is its own
+// control: the quote opens its style, the note opens for editing, a tag comes
+// off, and "Add Tag" / "Add Note" sit where a tag or a note would be.
+// Heading and body are redrawn only when what they say changes, and the open
+// tool has a slot of its own that a redraw never touches. Cards are matched to
+// passages by id and updated in place, so a change from another device never
+// closes the note someone is in the middle of writing.
+function cardHeadHtml(p, state) {
   const s = p.source || {};
-  const where = [s.title, s.chapter, `${Math.round(percentOf(p) * 100)}%`].filter(Boolean).map(esc).join(" · ");
+  const place = [s.title, s.chapter].filter(Boolean).join(", ");
+  const where = `${place}${place ? " - " : ""}${Math.round(percentOf(p) * 100)}%`;
   const stateInfo = store.LINK_STATES[state];
-  return `<blockquote class="passage-quote">${quoteHtml(p)}</blockquote>
-    ${p.note ? `<div class="passage-note">${esc(p.note)}</div>` : ""}
-    ${(p.tags || []).length ? `<div class="tag-chips passage-tags">${p.tags.map((t) => `<span class="tag-chip">${esc(t)}</span>`).join("")}</div>` : ""}
-    <div class="passage-meta"><span>${where}</span><span>${esc(store.styleLabel(p.style))}</span>${stateInfo ? `<span class="passage-state" title="${esc(stateInfo.hint)}">${STATE_ICONS[state]}${esc(stateInfo.label)}</span>` : ""}</div>`;
+  const open = view.menu === p.id;
+  const item = (name, label, disabled = false) => `<button type="button" role="menuitem" class="passage-menu-item" data-act="${name}"${disabled ? " disabled" : ""}>${label}</button>`;
+  return `<div class="passage-where">${esc(where)}</div>
+    <div class="passage-meta"><span class="passage-style">${esc(store.styleLabel(p.style))}</span>${stateInfo ? `<span class="passage-state" title="${esc(stateInfo.hint)}">${STATE_ICONS[state]}${esc(stateInfo.label)}</span>` : ""}</div>
+    <button type="button" class="passage-menu-btn" data-act="menu" aria-haspopup="menu" aria-expanded="${open}" aria-label="Passage options" title="Passage options">${ICONS.more}</button>
+    <div class="passage-menu${open ? "" : " hidden"}" role="menu">${item("copy", COPY_LABEL)}${item("visit", "View in book", state === "book-missing")}${
+      view.id === UNFILED ? item("file", "Add to journal") : item("remove", "Remove from journal")}${item("delete", "Delete passage")}</div>`;
 }
-function cardActionsHtml(state) {
-  const act = (name, label, extra = "") => `<button type="button" class="btn ghost" data-act="${name}"${extra}>${label}</button>`;
-  const membership = view.id === UNFILED ? act("file", "Add to journal") : act("remove", "Remove from journal");
-  return `${act("note", "Note")}${act("tags", "Tags")}${act("style", "Style")}${act("copy", "Copy")}${act("visit", "Visit in book", state === "book-missing" ? " disabled" : "")}${membership}${act("delete", "Delete")}`;
+function cardBodyHtml(p) {
+  const h = store.highlightById(p.style?.highlight);
+  const edit = (label) => `<button type="button" class="passage-edit" aria-label="${label}" title="${label}">${ICONS.edit}</button>`;
+  const add = (act, label) => `<button type="button" class="tag-chip passage-add" data-act="${act}">${label}${ICONS.plus}</button>`;
+  return `<blockquote class="passage-quote${h ? "" : " no-highlight"}" data-act="style"${h ? ` style="background:${h.color}"` : ""}>${quoteHtml(p)}${edit("Edit style")}</blockquote>
+    ${p.note ? `<div class="passage-note" data-act="note"><span class="passage-note-text">${esc(p.note)}</span>${edit("Edit note")}</div>` : ""}
+    <div class="tag-chips passage-tags">${(p.tags || []).map((t) =>
+      `<button type="button" class="tag-chip on" data-act="untag" data-tag="${esc(t)}" aria-label="Remove tag ${esc(t)}">${esc(t)}${ICONS.cross}</button>`).join("")}${add("tags", "Add Tag")}${p.note ? "" : add("note", "Add Note")}</div>`;
 }
 const drawnHtml = new WeakMap();
 function setHtml(el, html) { if (drawnHtml.get(el) !== html) { drawnHtml.set(el, html); el.innerHTML = html; } }
+// On a wide screen the cards run in two columns, each card placed under the
+// shorter one. The stylesheet does the placing; it needs to know how tall each
+// card is, in rows of the grid, and a card's height is its own business.
+const CARD_ROW_PX = 4, CARD_GAP_PX = 28;
+const cardHeights = "ResizeObserver" in window ? new ResizeObserver((entries) => {
+  for (const { target } of entries) target.style.setProperty("--rows", Math.ceil((target.offsetHeight + CARD_GAP_PX) / CARD_ROW_PX));
+}) : null;
 function renderCards(shown) {
   const existing = new Map();
   for (const el of [...els.cards.children]) {
@@ -413,18 +441,32 @@ function renderCards(shown) {
       card = document.createElement("article");
       card.className = "passage-card";
       card.dataset.passageId = p.id;
-      card.innerHTML = `<div class="passage-body"></div><div class="passage-actions"></div><div class="passage-tool hidden"></div>`;
+      card.innerHTML = `<header class="passage-head"></header><div class="passage-panel"><div class="passage-body"></div><div class="passage-tool hidden"></div></div>`;
+      cardHeights?.observe(card);
     }
-    const state = stateOf(p);
-    setHtml(card.children[0], cardBodyHtml(p, state));
-    setHtml(card.children[1], cardActionsHtml(state));
+    setHtml(card.querySelector(".passage-head"), cardHeadHtml(p, stateOf(p)));
+    setHtml(card.querySelector(".passage-body"), cardBodyHtml(p));
     if (els.cards.children[at] !== card) els.cards.insertBefore(card, els.cards.children[at] || null);
     at += 1;
   }
   for (const [id, card] of existing) {
     if (view.tool?.passageId === id) view.tool = null;
+    if (view.menu === id) view.menu = null;
+    cardHeights?.unobserve(card);
     card.remove();
   }
+}
+// One card's overflow menu is open at a time; null closes it.
+function setMenu(passageId) {
+  if (!view || view.menu === passageId) return;
+  view.menu = passageId;
+  for (const card of els.cards.querySelectorAll(".passage-card")) {
+    const open = card.dataset.passageId === passageId;
+    card.classList.toggle("menu-open", open);
+    card.querySelector(".passage-menu").classList.toggle("hidden", !open);
+    card.querySelector('[data-act="menu"]').setAttribute("aria-expanded", String(open));
+  }
+  if (passageId) toolCard(passageId)?.querySelector(".passage-menu").scrollIntoView({ block: "nearest" });
 }
 
 function toolCard(passageId) { return els.cards.querySelector(`[data-passage-id="${CSS.escape(passageId)}"]`); }
@@ -450,7 +492,8 @@ function openCardTool(card, kind) {
   card.classList.add(`tool-${kind}`);
   let handle;
   if (kind === "note") handle = mountNoteTool(slot, passageId, closeCardTool);
-  else if (kind === "tags") handle = mountTagTool(slot, passageId);
+  // The card shows the passage's tags itself, each one removable where it is.
+  else if (kind === "tags") handle = mountTagTool(slot, passageId, { chips: false });
   else if (kind === "style") handle = mountStyleTool(slot, passageId);
   else handle = mountAddToJournal(slot, passageId);
   view.tool = { passageId, kind, handle };
@@ -477,6 +520,7 @@ function mountAddToJournal(el, passageId) {
   return { commit() {} };
 }
 
+const COPY_LABEL = "Add to clipboard";
 async function copyPassage(p, button) {
   const s = p.source || {};
   const text = `“${p.text}”${s.title ? `\n— ${s.title}${s.author ? `, ${s.author}` : ""}` : ""}`;
@@ -493,8 +537,12 @@ async function copyPassage(p, button) {
     try { ok = document.execCommand("copy"); } catch {}
     area.remove();
   }
-  button.textContent = ok ? "Copied" : "Couldn't copy";
-  setTimeout(() => { if (button.isConnected) button.textContent = "Copy"; }, 1500);
+  // Said where it was asked, then the menu is put away.
+  button.textContent = ok ? "Added to clipboard" : "Couldn't copy";
+  setTimeout(() => {
+    if (button.isConnected) button.textContent = COPY_LABEL;
+    if (view?.menu === p.id) setMenu(null);
+  }, 1200);
 }
 
 // A field someone is using is left alone: its panel is redrawn when they leave.
@@ -508,12 +556,13 @@ function renderJournal() {
   if (view.id !== UNFILED && !j) { closeJournal(); return; }   // deleted, here or on another device
   els.title.textContent = j ? j.name : "Unfiled";
   els.settingsToggle.classList.toggle("hidden", !j);
-  if (!j) els.settings.classList.add("hidden");
-  else if (!els.settings.classList.contains("hidden") && !typingIn(els.settings) && !settingsAsk) renderSettings();
+  if (!j) setSettingsOpen(false);
+  else if (settingsOpen() && !typingIn(els.settings) && !settingsAsk) renderSettings();
   const all = viewPassages();
   if (!typingIn(els.tools)) renderFilters(all);
   const shown = filteredPassages(all);
-  els.count.textContent = shown.length === all.length ? plural(all.length, "passage") : `${shown.length} of ${plural(all.length, "passage")}`;
+  const noun = all.length === 1 ? "Passage" : "Passages";
+  els.count.textContent = shown.length === all.length ? `${all.length} ${noun}` : `${shown.length} of ${all.length} ${noun}`;
   renderCards(shown);
   if (!shown.length) {
     const empty = document.createElement("div");
@@ -552,8 +601,8 @@ function renderSettings() {
   const tags = store.tagsInJournal(j.id);
   const type = els.settings.querySelector("[data-source-type]")?.value || "book";
   els.settings.innerHTML = `
-    <div class="journal-setting"><label for="journal-name">Name</label><input id="journal-name" type="text" value="${esc(j.name)}" maxlength="120" autocomplete="off"></div>
-    <div class="journal-setting"><span class="drawer-label">Sources</span>
+    <div class="drawer-field"><label for="journal-name">Name</label><input id="journal-name" type="text" value="${esc(j.name)}" maxlength="120" autocomplete="off"></div>
+    <div class="drawer-field"><span class="drawer-label">Sources</span>
       ${sources.length ? `<ul class="journal-list">${sources.map((s) => `<li><span>${esc(sourceLabel(s))}</span>
         <button type="button" class="btn${s.enabled !== false ? " primary" : ""}" data-source-toggle="${esc(store.sourceKey(s))}" aria-pressed="${s.enabled !== false}">${s.enabled !== false ? "On" : "Off"}</button></li>`).join("")}</ul>`
         : `<p class="hint">No sources yet. Add a book, a series or an author and its highlights are collected here.</p>`}
@@ -561,14 +610,15 @@ function renderSettings() {
         <select data-source-value aria-label="Source"></select><button type="button" class="btn" data-source-add>Add source</button></div>
       <div data-ask></div>
     </div>
-    <div class="journal-setting"><span class="drawer-label">Tags in this journal</span>
+    <div class="drawer-field"><span class="drawer-label">Tags in this journal</span>
       ${tags.length ? `<ul class="journal-list">${tags.map((t) => `<li data-tag="${esc(t.tag)}"><span>${esc(t.tag)} (${t.count})</span>
         <button type="button" class="btn ghost" data-tag-rename>Rename</button>
-        ${tags.length > 1 ? `<select data-tag-merge aria-label="Merge ${esc(t.tag)} into"><option value="">Merge into…</option>${tags.filter((o) => o.tag !== t.tag).map((o) => `<option value="${esc(o.tag)}">${esc(o.tag)}</option>`).join("")}</select>` : ""}
-        <button type="button" class="btn ghost" data-tag-delete>Delete</button></li>`).join("")}</ul>` : `<p class="hint">No tags used here yet.</p>`}
+        <button type="button" class="btn ghost" data-tag-delete>Delete</button>
+        ${tags.length > 1 ? `<select data-tag-merge aria-label="Merge ${esc(t.tag)} into"><option value="">Merge into…</option>${tags.filter((o) => o.tag !== t.tag).map((o) => `<option value="${esc(o.tag)}">${esc(o.tag)}</option>`).join("")}</select>` : ""}</li>`).join("")}</ul>` : `<p class="hint">No tags used here yet.</p>`}
     </div>
-    <div class="journal-setting row"><a class="btn" href="/api/journal/journals/${encodeURIComponent(j.id)}/export.md" download>Export Markdown</a>
-      <button type="button" class="btn" data-journal-delete>Delete journal</button></div>`;
+    <div class="drawer-divider"></div>
+    <a class="btn" href="/api/journal/journals/${encodeURIComponent(j.id)}/export.md" download>Export Markdown</a>
+    <button type="button" class="btn" data-journal-delete>Delete journal</button>`;
   const typeSel = els.settings.querySelector("[data-source-type]"), valueSel = els.settings.querySelector("[data-source-value]");
   typeSel.value = type;
   const fillValues = () => {
@@ -580,6 +630,15 @@ function renderSettings() {
   };
   typeSel.addEventListener("change", fillValues);
   fillValues();
+}
+// Journal settings open in the same drawer the library's view options use.
+function settingsOpen() { return !els.drawer.classList.contains("hidden"); }
+function setSettingsOpen(open) {
+  if (open === settingsOpen()) return;
+  els.drawer.classList.toggle("hidden", !open);
+  els.settingsToggle.setAttribute("aria-expanded", String(open));
+  if (open) renderSettings();
+  else settingsAsk = null;
 }
 async function settingsEnable(source) {
   const j = viewJournal();
@@ -646,14 +705,23 @@ function onSettingsChange(e) {
 }
 
 function onCardClick(e) {
-  const button = e.target.closest("[data-act]");
-  if (!button || button.disabled) return;
-  const card = button.closest("[data-passage-id]");
+  const target = e.target.closest("[data-act]");
+  if (!target || target.disabled) return;
+  const card = target.closest("[data-passage-id]");
   const p = store.passage(card.dataset.passageId);
   if (!p) return;
-  const act = button.dataset.act;
-  if (["note", "tags", "style", "file"].includes(act)) { openCardTool(card, act); return; }
-  if (act === "copy") { copyPassage(p, button); return; }
+  const act = target.dataset.act;
+  if (act === "menu") { setMenu(view.menu === p.id ? null : p.id); return; }
+  if (act === "copy") { copyPassage(p, target); return; }
+  setMenu(null);
+  if (act === "untag") { store.removeTag(p.id, target.dataset.tag); return; }
+  if (["note", "tags", "style", "file"].includes(act)) {
+    // The quote and the note are text as well as controls: dragging across
+    // them to select some is not a tap.
+    if (!e.target.closest("button") && String(window.getSelection() || "")) return;
+    openCardTool(card, act);
+    return;
+  }
   closeCardTool();
   if (act === "visit") host.visit(p);
   else if (act === "remove") store.removeFromJournal(p.id, view.id);
@@ -669,15 +737,14 @@ export function openJournal(id, { settings = false, focus = null, overReader = f
   if (id !== UNFILED && !store.journal(id)) return;
   const opening = !view;
   closeCardTool();
-  view = { id, query: "", tag: "", book: "", style: "", state: "", sort: "newest", tool: null };
+  view = { id, query: "", tag: "", book: "", style: "", state: "", sort: "newest", tool: null, menu: null };
   els.search.value = "";
   els.view.classList.remove("hidden");
   document.body.classList.add("journal-open");
   if (overReader) setRaised({ keepOpen: raised ? raised.keepOpen : !opening });
-  els.settings.classList.toggle("hidden", !settings || id === UNFILED);
-  els.settingsToggle.setAttribute("aria-expanded", String(settings && id !== UNFILED));
-  if (settings && id !== UNFILED) renderSettings();
+  setSettingsOpen(false);
   renderJournal();
+  setSettingsOpen(settings && id !== UNFILED);
   els.cards.scrollTop = 0;
   for (const card of els.cards.querySelectorAll(".focused")) card.classList.remove("focused");
   const card = focus ? toolCard(focus) : null;
@@ -707,18 +774,17 @@ export function dismissLoweredJournal() {
 }
 // Back from the journal. Over a book that means back to the page.
 export function leaveJournal() {
-  if (raised?.keepOpen) { closeCardTool(); setRaised(null); }
+  if (raised?.keepOpen) { closeCardTool(); setMenu(null); setSettingsOpen(false); setRaised(null); }
   else closeJournal();
 }
 export function closeJournal() {
   if (!view) return;
   closeCardTool();
+  setSettingsOpen(false);
   view = null;
-  settingsAsk = null;
   lowered = null;
   setRaised(null);
   els.view.classList.add("hidden");
-  els.settings.classList.add("hidden");
   document.body.classList.remove("journal-open");
   store.stopPolling();
   renderShelf();
@@ -731,11 +797,10 @@ export function initJournals(h) {
     openJournal(store.createJournal(name).id, { settings: true });
   });
   els.back.addEventListener("click", leaveJournal);
-  els.settingsToggle.addEventListener("click", () => {
-    const open = els.settings.classList.toggle("hidden") === false;
-    els.settingsToggle.setAttribute("aria-expanded", String(open));
-    if (open) renderSettings();
-  });
+  els.settingsToggle.addEventListener("click", () => setSettingsOpen(!settingsOpen()));
+  els.drawer.addEventListener("click", (e) => { if (e.target.hasAttribute("data-close-journal-drawer")) setSettingsOpen(false); });
+  // A tap anywhere else puts an open overflow menu away.
+  document.addEventListener("click", (e) => { if (view?.menu && !e.target.closest?.('.passage-menu, [data-act="menu"]')) setMenu(null); });
   els.settings.addEventListener("click", onSettingsClick);
   els.settings.addEventListener("change", onSettingsChange);
   els.cards.addEventListener("click", onCardClick);
@@ -752,7 +817,10 @@ export function initJournals(h) {
   document.addEventListener("keydown", (e) => {
     // Under an open book, Escape belongs to the reader.
     if (e.key !== "Escape" || !view || (document.body.classList.contains("reader-open") && !raised)) return;
-    if (view.tool) closeCardTool(); else leaveJournal();
+    if (settingsOpen()) setSettingsOpen(false);
+    else if (view.menu) setMenu(null);
+    else if (view.tool) closeCardTool();
+    else leaveJournal();
   });
   store.subscribe(() => { renderShelf(); if (view) renderJournal(); });
   return store.initStore();

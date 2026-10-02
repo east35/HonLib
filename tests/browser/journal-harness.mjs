@@ -81,6 +81,88 @@ export async function selectText(page, selector, start, end) {
     || !document.querySelector("#dict-popover").classList.contains("hidden"));
 }
 
+// Select the last `length` characters showing on the page: the text a sheet
+// docked at the foot of the screen would cover, and the place a passage that
+// runs on to the next page is selected up to.
+export async function selectPageEnd(page, length) {
+  await page.evaluate((length) => {
+    const view = document.querySelector("foliate-view");
+    const visible = view.lastLocation.range;
+    const doc = visible.endContainer.ownerDocument;
+    const range = doc.createRange();
+    range.setStart(visible.endContainer, Math.max(0, visible.endOffset - length));
+    range.setEnd(visible.endContainer, visible.endOffset);
+    const selection = doc.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, length);
+  await page.locator("#passage-sheet").waitFor({ state: "visible" });
+}
+
+// Where the selection and the open sheet are on the screen, top and bottom.
+export async function sheetAndSelection(page, sheet = "#passage-sheet") {
+  return page.evaluate((sheet) => {
+    const view = document.querySelector("foliate-view");
+    const doc = view.renderer.getContents()[0].doc;
+    const frame = doc.defaultView.frameElement.getBoundingClientRect();
+    const rects = [...doc.getSelection().getRangeAt(0).getClientRects()]
+      .filter((r) => frame.left + r.right > 0 && frame.left + r.left < window.innerWidth);
+    const el = document.querySelector(sheet).getBoundingClientRect();
+    return {
+      selection: { top: frame.top + Math.min(...rects.map((r) => r.top)), bottom: frame.top + Math.max(...rects.map((r) => r.bottom)) },
+      sheet: { top: el.top, bottom: el.bottom },
+      atTop: document.querySelector(sheet).classList.contains("at-top"),
+    };
+  }, sheet);
+}
+
+// What a stretch of text looks like on the screen: `ink` is the share of it
+// that is dark (its letters), `ground` the colour behind them. The picture is
+// read back through a canvas in the page, as node has nothing to decode it.
+export async function inkOf(page, selector, start, end) {
+  const clip = await page.evaluate(({ selector, start, end }) => {
+    const doc = document.querySelector("foliate-view").renderer.getContents()[0].doc;
+    const node = doc.querySelector(selector).firstChild;
+    const range = doc.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, end);
+    const rect = range.getClientRects()[0], frame = doc.defaultView.frameElement.getBoundingClientRect();
+    return { x: frame.left + rect.left, y: frame.top + rect.top, width: rect.width, height: rect.height };
+  }, { selector, start, end });
+  const png = await page.screenshot({ clip });
+  return page.evaluate(async (data) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${data}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d");
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let dark = 0;
+    for (let i = 0; i < pixels.length; i += 4) if (pixels[i] + pixels[i + 1] + pixels[i + 2] < 250) dark += 1;
+    // Two pixels in from the corner: inside the mark, clear of any letter.
+    const corner = (2 * canvas.width + 2) * 4;
+    return { ink: dark / (pixels.length / 4), ground: [...pixels.slice(corner, corner + 3)] };
+  }, png.toString("base64"));
+}
+
+// The ranges the book's document has been given to tint, by colour.
+export function tinted(page) {
+  return page.evaluate(() => {
+    const doc = document.querySelector("foliate-view").renderer.getContents()[0].doc;
+    return Object.fromEntries([...doc.defaultView.CSS.highlights].map(([name, set]) => [name.replace("honlib-", ""), set.size]).filter(([, size]) => size));
+  });
+}
+
+// A card's overflow menu holds what is done to the passage as a whole: copy
+// it, open its page, take it out of the journal, delete it.
+export async function cardMenu(card, act) {
+  await card.locator('[data-act="menu"]').click();
+  await card.locator(`.passage-menu [data-act="${act}"]`).click();
+}
+
 // Screen position of a character inside the book, for tapping it.
 export async function pointInText(page, selector, offset) {
   return page.evaluate(({ selector, offset }) => {
