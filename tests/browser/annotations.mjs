@@ -533,50 +533,51 @@ async function fingerHolds(browser, name) {
   assert.equal(await movedFrom(page, start, 1200), false, `${name}: dragging a held finger turned the page`);
   await putAway();
 
-  // Let go a little early, with nothing selected yet: too long for a tap.
+  // Let go just after the hold comes due: the word is selected, not tapped.
   await touch("touchStart", at.x, at.y);
   await page.waitForTimeout(440);
   await touch("touchEnd");
   assert.equal(await movedFrom(page, start, 1200), false, `${name}: a press held almost to the long press turned the page`);
   await putAway();
 
-  // With text selected, a finger that misses the selection handle and drags
-  // the page instead is not a swipe either.
-  await selectText(page, "#one-p0", 100, 180);
-  await touch("touchStart", at.x + 100, at.y);
-  await touch("touchMove", at.x - 200, at.y);
-  await touch("touchEnd");
-  assert.equal(await movedFrom(page, start, 1200), false, `${name}: a drag across the page with text selected turned it`);
-  await putAway();
-
-  // A finger's selection is taken over by the reader: the page lets go of its
-  // own, and with it the system's handles and its Copy / Share / Select all
-  // bar, which would sit on top of the annotation bar. The passage is shown as
-  // a highlight instead, and moved by taps.
+  // A finger's selection is the reader's own from the start. The page's own
+  // selecting is off, so nothing of the system's comes with it (handles, or
+  // the Copy / Share / Select all bar that sat on the annotation bar), and
+  // there is no second selection for this one to fall out of step with.
   const held = () => page.evaluate(() => {
     const doc = document.querySelector("foliate-view").renderer.getContents()[0].doc;
     const set = doc.defaultView.CSS.highlights.get("honlib-selection");
     return { page: doc.getSelection().toString(), reader: set ? [...set].map((r) => r.toString().replace(/\s+/g, " ").trim()) : [] };
   });
-  // Not while the finger is still down, though: a press runs on into a drag
-  // across the words, and that is the system's to do.
-  const finger = (type) => page.evaluate((type) => {
-    const doc = document.querySelector("foliate-view").renderer.getContents()[0].doc;
-    const touch = new Touch({ identifier: 7, target: doc.body, clientX: 5, clientY: 5 });
-    doc.body.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches: type === "touchstart" ? [touch] : [], changedTouches: [touch] }));
-  }, type);
-  await finger("touchstart");
-  await selectText(page, "#one-p0", 17, 33);
-  await page.waitForTimeout(300);
-  assert.deepEqual(await held(), { page: "Filler text that", reader: [] }, `${name}: the selection was taken from under a finger still on the page`);
-  await finger("touchend");
-  assert.deepEqual(await held(), { page: "", reader: ["Filler text that"] }, `${name}: a finger's selection was left to the system after it lifted`);
-  // A drag stops wherever the finger was; a word cut off at either end is made whole.
+  const spot = (offset) => pointInText(page, "#one-p0", offset);
+  // Held on a word, the finger selects it. Dragged on, with a rest on the way
+  // (a pause in a drag once cut the selection short), it takes the selection
+  // to the word it is lifted on.
+  let from = await spot(19), to = await spot(30);
+  await touch("touchStart", from.x, from.y);
+  await page.waitForTimeout(550);
+  assert.deepEqual(await held(), { page: "", reader: ["Filler"] }, `${name}: a finger held on a word did not select it`);
+  assert.equal(await page.evaluate(() => document.querySelector("foliate-view").renderer.getContents()[0].doc.documentElement.style.userSelect), "none", `${name}: the page's own selecting is still on under a finger`);
+  await touch("touchMove", to.x, to.y);
+  await page.waitForTimeout(1600);
+  assert.deepEqual((await held()).reader, ["Filler text that"], `${name}: the selection did not follow the finger`);
+  assert.equal(await sheetOpen(page), false, `${name}: the annotation bar came up under a finger still dragging`);
+  to = await spot(61);
+  await touch("touchMove", to.x, to.y);
+  await touch("touchEnd");
+  assert.deepEqual(await held(), { page: "", reader: ["Filler text that exists only to make this section"] }, `${name}: a drag that rested on the way lost what came after the rest`);
+  assert.equal(await page.locator("#passage-sheet .ps-quote").textContent(), "Filler text that exists only to make this section", `${name}: the annotation bar is not about what the finger selected`);
+  // Dragged back the other way from the word it started on, it runs backwards.
   await page.evaluate(() => document.querySelector("#passage-sheet [data-ps-close]").click());
-  await selectText(page, "#one-p0", 19, 31);
-  assert.deepEqual(await held(), { page: "", reader: ["Filler text that"] }, `${name}: a selection ending mid-word was not rounded out to whole words`);
+  from = await spot(44);
+  to = await spot(19);
+  await touch("touchStart", from.x, from.y);
+  await page.waitForTimeout(550);
+  await touch("touchMove", to.x, to.y);
+  await touch("touchEnd");
+  assert.deepEqual((await held()).reader, ["Filler text that exists only"], `${name}: a selection dragged backwards did not run back to the word under the finger`);
   const tapWord = async (offset) => {
-    const point = await pointInText(page, "#one-p0", offset);
+    const point = await spot(offset);
     await page.touchscreen.tap(point.x, point.y);
     return (await held()).reader[0];
   };
@@ -585,17 +586,19 @@ async function fingerHolds(browser, name) {
   assert.equal(await tapWord(42), "Filler text that exists only", `${name}: a finger's tap inside the selection did not shorten it`);
   assert.equal(await movedFrom(page, start, 600), false, `${name}: a finger's tap on a word turned the page with text selected`);
   // A finger put down on the end of it and dragged takes the end with it, on
-  // and back again.
-  const dragEnd = async (from, to) => {
-    const a = await pointInText(page, "#one-p0", from), b = await pointInText(page, "#one-p0", to);
-    await touch("touchStart", a.x, a.y);
-    await touch("touchMove", (a.x + b.x) / 2, (a.y + b.y) / 2);
-    await touch("touchMove", b.x, b.y);
+  // and back again, whether or not it rests there first.
+  const dragEnd = async (a, b, rest = 0) => {
+    from = await spot(a);
+    to = await spot(b);
+    await touch("touchStart", from.x, from.y);
+    if (rest) await page.waitForTimeout(rest);
+    await touch("touchMove", (from.x + to.x) / 2, (from.y + to.y) / 2);
+    await touch("touchMove", to.x, to.y);
     await touch("touchEnd");
     return (await held()).reader[0];
   };
   assert.equal(await dragEnd(44, 61), "Filler text that exists only to make this section", `${name}: dragging the end of the selection did not stretch it`);
-  assert.equal(await dragEnd(64, 30), "Filler text that", `${name}: dragging the end of the selection back did not shorten it`);
+  assert.equal(await dragEnd(64, 30, 600), "Filler text that", `${name}: holding the end of the selection and dragging it back did not shorten it`);
   assert.equal(await tapWord(61), "Filler text that exists only to make this section");
   assert.equal(await page.locator("#passage-sheet .ps-quote").textContent(), "Filler text that exists only to make this section");
   assert.equal(await movedFrom(page, start, 600), false, `${name}: dragging the selection turned the page`);

@@ -170,10 +170,10 @@ The bar sits beside what you are marking: just over the selection, or under it
 where there is no room above. With text selected, tap a word to end the
 selection there (further on to stretch it, inside it to cut it short), tap a
 word before it to start it there, or drag either end. On a touchscreen the
-reader takes the selection over once your finger lifts, so the system's handles
-and its Copy / Share / Select all bar don't sit on top of the annotation bar;
-press-and-hold and drag works as usual until then. **Cancel**, or a tap off the
-text, lets the selection go.
+reader does the selecting itself: press-and-hold a word, and drag on from there
+to stretch it. The system's handles and its Copy / Share / Select all bar never
+appear, so nothing sits on top of the annotation bar. **Cancel**, or a tap off
+the text, lets the selection go.
 
 The page never turns under a selection. When a passage runs past the foot of
 the page, select to the end of the page and the bar offers **Continue on next
