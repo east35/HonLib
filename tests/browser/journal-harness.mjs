@@ -177,6 +177,19 @@ export async function pointInText(page, selector, offset) {
   }, { selector, offset });
 }
 
+// A character at or after `offset` that sits where a tap turns the page
+// forward. Where a given character falls depends on the fonts of the machine,
+// and one at the start of a line is in the strip down the left that turns
+// back, which on a book's first page turns nothing.
+export async function forwardPointInText(page, selector, offset) {
+  for (let at = offset; at < offset + 120; at++) {
+    const point = await pointInText(page, selector, at);
+    const width = page.viewportSize().width;
+    if (point.x > width * 0.3 && point.x < width * 0.9) return point;
+  }
+  throw new Error(`no character of ${selector} from ${offset} is clear of the page's edges`);
+}
+
 export async function tapText(page, selector, offset) {
   const point = await pointInText(page, selector, offset);
   await page.mouse.click(point.x, point.y);

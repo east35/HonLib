@@ -637,7 +637,11 @@ function renderSettings() {
   if (!tags.some((t) => t.tag === tagMenu)) tagMenu = null;
   const options = sourceOptionsHtml(sources);
   const item = (attr, label) => `<button type="button" role="menuitem" class="passage-menu-item" ${attr}>${label}</button>`;
-  els.settings.innerHTML = `
+  // Redrawn only when what it says has changed. A redraw replaces the
+  // controls, and one that lands between a press and its release (focus
+  // leaving a control is enough to ask for one) takes the control from under
+  // the tap.
+  setHtml(els.settings, `
     <div class="drawer-field"><label for="journal-name">Name</label><input id="journal-name" type="text" value="${esc(j.name)}" maxlength="120" autocomplete="off"></div>
     <div class="drawer-field"><span class="drawer-label">Sources</span>
       ${sources.length ? `<ul class="journal-list">${sources.map((s) => `<li><span>${esc(sourceLabel(s))}</span>
@@ -654,15 +658,11 @@ function renderSettings() {
     </div>
     <div class="drawer-divider"></div>
     <a class="btn" href="/api/journal/journals/${encodeURIComponent(j.id)}/export.md" download>Export Markdown</a>
-    <button type="button" class="btn" data-journal-delete>Delete journal</button>`;
+    <button type="button" class="btn" data-journal-delete>Delete journal</button>`);
 }
 function setTagMenu(tag) {
   tagMenu = tag;
-  for (const row of els.settings.querySelectorAll("[data-tag]")) {
-    const open = row.dataset.tag === tag;
-    row.querySelector(".passage-menu").classList.toggle("hidden", !open);
-    row.querySelector("[data-tag-menu]").setAttribute("aria-expanded", String(open));
-  }
+  renderSettings();
   if (tag) els.settings.querySelector('[data-tag-menu][aria-expanded="true"] + .passage-menu')?.scrollIntoView({ block: "nearest" });
 }
 // Journal settings open in the same drawer the library's view options use.

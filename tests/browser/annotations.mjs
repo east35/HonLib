@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { chromium, webkit } from "playwright";
 import { engines, openBook, readState, settled } from "./reader-harness.mjs";
-import { BOOKS, hideChrome, inkOf, journalState, libraryBook, movedFrom, pointInText, selectPageEnd, selectText, sheetAndSelection, sheetOpen, tapText, tinted, waitForJournal, wipeJournals } from "./journal-harness.mjs";
+import { BOOKS, forwardPointInText, hideChrome, inkOf, journalState, libraryBook, movedFrom, pointInText, selectPageEnd, selectText, sheetAndSelection, sheetOpen, tapText, tinted, waitForJournal, wipeJournals } from "./journal-harness.mjs";
 
 async function barButtons(page) {
   return page.locator("#passage-sheet .ps-bar button").allTextContents();
@@ -148,10 +148,11 @@ async function tapsOnAndOffTheMark(page, name, passageId) {
   assert.equal(await page.locator("#passage-sheet .ps-status").textContent(), "In My First Journal");
 
   // Tapping plain text puts the sheet away and nothing else; the next tap turns.
-  await tapText(page, "#one-p1", 300);
+  const plain = await forwardPointInText(page, "#one-p1", 300);
+  await page.mouse.click(plain.x, plain.y);
   assert.equal(await sheetOpen(page), false, `${name}: tapping the page did not dismiss the sheet`);
   assert.equal(await movedFrom(page, start, 800), false, `${name}: the dismissing tap also turned the page`);
-  await tapText(page, "#one-p1", 300);
+  await page.mouse.click(plain.x, plain.y);
   assert.equal(await movedFrom(page, start), true, `${name}: a tap off the mark no longer turns the page`);
   await page.evaluate(() => window.ebookTurnPage("prev"));
   await settled(page);
@@ -490,7 +491,7 @@ async function fingerTaps(browser, name) {
   await page.locator("#passage-sheet [data-ps-edit]").waitFor();
   assert.deepEqual(await barButtons(page), ["View in journal", "Edit annotation"], `${name}: a finger on a mark did not open its passage`);
   assert.equal(await movedFrom(page, start, 600), false, `${name}: a finger on a mark turned the page`);
-  const plain = await pointInText(page, "#one-p0", 300);
+  const plain = await forwardPointInText(page, "#one-p0", 300);
   await page.touchscreen.tap(plain.x, plain.y);
   await page.locator("#passage-sheet").waitFor({ state: "hidden" });
   await page.touchscreen.tap(plain.x, plain.y);
@@ -513,7 +514,7 @@ async function fingerHolds(browser, name) {
   const start = await settled(page);
   const cdp = await context.newCDPSession(page);
   const touch = (type, x, y) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
-  const at = await pointInText(page, "#one-p1", 300);
+  const at = await forwardPointInText(page, "#one-p1", 300);
   // By its own button: a selection the reader holds is not the page's to drop.
   const putAway = async () => {
     await page.evaluate(() => {
