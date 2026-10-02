@@ -1548,7 +1548,8 @@ function onReaderTap(el, handler) {
   let sx = 0, sy = 0, st = 0, moved = false, down = false;
   let dictWasOpen = false;
   el.addEventListener("pointerdown", (e) => {
-    if (!e.isPrimary) return;
+    // A second finger makes it something other than a tap.
+    if (!e.isPrimary) { down = false; return; }
     down = true; moved = false; sx = e.clientX; sy = e.clientY; st = Date.now();
     // Captured here because the document-level pointerdown listener closes the
     // definition popover (or annotation sheet) before this pointerup runs — see
@@ -1606,6 +1607,25 @@ onReaderTap(els.hitRight, pageTurnTap);
 // Taps that land on the viewer are in the margin space around the text the
 // narrow overlays don't cover; they are already in host coordinates.
 onReaderTap(els.viewer, pageTurnTap);
+// Foliate listens for touches on the viewer's margins as well as inside the
+// book, and snaps to a page whenever one lifts. A tap there has just turned
+// the page above, so on a chapter's last page the snap starts a second move
+// into the next chapter alongside it (the fault wireReaderInput guards against
+// inside the book). A finger that stayed put is kept from Foliate; one that
+// travelled is a swipe and is left to it.
+{
+  let x = 0, y = 0, travelled = false;
+  els.viewer.addEventListener("touchstart", (e) => {
+    const touch = e.changedTouches[0];
+    x = touch?.clientX || 0; y = touch?.clientY || 0;
+    travelled = false;
+  }, true);
+  els.viewer.addEventListener("touchmove", (e) => {
+    const touch = e.changedTouches[0];
+    if (!touch || Math.abs(touch.clientX - x) > TAP_SLOP_PX || Math.abs(touch.clientY - y) > TAP_SLOP_PX) travelled = true;
+  }, true);
+  els.viewer.addEventListener("touchend", (e) => { if (!travelled) e.stopPropagation(); }, true);
+}
 // The top edge bar closes the book. It deliberately skips the chrome-hidden
 // dismissal the page-turn edges do: leaving should never cost a second tap.
 onReaderTap(els.hitBack, (e, dictWasOpen) => {
@@ -1698,6 +1718,9 @@ function wireReaderInput(doc) {
   };
   doc.addEventListener("touchstart", (e) => {
     const touch = e.touches.length === 1 ? e.changedTouches[0] : null;
+    // More than one finger is the renderer's (a pinch), and not a tap: the
+    // first finger's lift must not turn the page while Foliate snaps to one.
+    if (!touch) tracking = false;
     touchKind = !touch ? null : selecting() || pendingSelection ? "hold" : "undecided";
     touchX = touch?.clientX || 0;
     touchY = touch?.clientY || 0;
@@ -1747,7 +1770,7 @@ function wireReaderInput(doc) {
 
   let sx = 0, sy = 0, st = 0, moved = false, held = false, tracking = false;
   doc.addEventListener("pointerdown", (e) => {
-    if (!e.isPrimary) return;
+    if (!e.isPrimary) { tracking = false; return; }
     tracking = true; moved = false; held = false; sx = e.clientX; sy = e.clientY; st = Date.now();
     pressed = { doc, at: st };
     // A mouse selects the way the page does.
@@ -1777,6 +1800,9 @@ function wireReaderInput(doc) {
     pressed = null;
     // A drag or long-press is a selection gesture (dictionary), never a tap.
     if (moved || held || Date.now() - st > TAP_MAX_MS) { settle(); return; }
+    // And a tap is never a hold: the lift has come first, so the hold that was
+    // about to come due must not start a selection on a page being turned.
+    clearTimeout(pressTimer);
     // While text is selected, a tap on a word moves the selection's end to it,
     // and a tap on anything else lets the selection go. Either way the tap is
     // spent. (A carried passage is only let go from its Cancel: there, a stray
@@ -2868,9 +2894,11 @@ function turnPage(go) {
   turningPage = true;
   try { return go(); } finally { turningPage = false; }
 }
-// A passage being carried forward keeps its sheet through a turn of the page.
-function readerNext() { if (readerView) { if (!carrying) closePassageSheet(); turnPage(() => readerView.goRight()); } }
-function readerPrev() { if (readerView) { closePassageSheet(); turnPage(() => readerView.goLeft()); } }
+// Turning the page lets go of whatever was selected on it, sheet and all. A
+// passage being carried forward is the exception: it keeps its sheet through
+// the turn.
+function readerNext() { if (readerView) { if (!carrying) closeReaderSheets(); turnPage(() => readerView.goRight()); } }
+function readerPrev() { if (readerView) { if (!carrying) closeReaderSheets(); turnPage(() => readerView.goLeft()); } }
 // Hook a native wrapper (e.g. an Android WebView that captures the BOOX volume
 // buttons) can call: window.ebookTurnPage('next' | 'prev').
 window.ebookTurnPage = (dir) => { if (readerView && !journalOverReader()) (dir === "prev" ? readerPrev() : readerNext()); };
