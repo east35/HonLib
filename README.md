@@ -166,10 +166,18 @@ saved the moment you make it. Tap a mark later and it shows you the passage and
 its note, with **View in journal** (the journal opens over the page, on that
 passage) and **Edit annotation** (the tools, to restyle, retag or delete it).
 
-The bar sits beside what you are marking: just under the selection, or just
-over it where there is no room beneath. The page never turns under a selection. When a passage runs past the foot of the page,
-select to the end of the page and the bar offers **Continue on next page**; the
-page turns, and a tap on the passage's last word finishes it.
+The bar sits beside what you are marking: just over the selection, or under it
+where there is no room above. With text selected, tap a word to end the
+selection there (further on to stretch it, inside it to cut it short), tap a
+word before it to start it there, or drag either end. On a touchscreen the
+reader takes the selection over once your finger lifts, so the system's handles
+and its Copy / Share / Select all bar don't sit on top of the annotation bar;
+press-and-hold and drag works as usual until then. **Cancel**, or a tap off the
+text, lets the selection go.
+
+The page never turns under a selection. When a passage runs past the foot of
+the page, select to the end of the page and the bar offers **Continue on next
+page**; the page turns, and a tap on the passage's last word finishes it.
 
 - **Styles** — a passage can have a highlight colour (yellow, green, blue, pink,
   orange), an underline style (solid, dashed, dotted, wavy, double), or both.

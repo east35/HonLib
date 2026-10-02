@@ -42,9 +42,26 @@ let readerView = null;
 let dictReqId = 0;
 let dictDebounce = null;
 // The text selected in the book and not yet acted on: { doc, index, range,
-// text }. Kept from the moment a selection settles, so Save and the annotation
-// bar act on what was selected even if the tap on them disturbs the selection.
+// text, savedId, fraction, held }. Kept from the moment a selection settles,
+// so Save and the annotation bar act on what was selected even if the tap on
+// them disturbs the selection. `held` says the reader has taken it over from
+// the page (see takeSelection), `fraction` how far through the book it began.
 let pendingSelection = null;
+// The range the reader is showing as selected in place of the page's own
+// selection: { set, range }, a highlight it was added to.
+let heldTint = null;
+// The kind of pointer last put down on the page ("touch", "mouse", "pen").
+let lastPointerType = "";
+// A press on the page still in progress: { doc, at }. The page drops its
+// selection the moment a mouse goes down, before the reader knows whether that
+// was a tap on a word.
+let pressed = null;
+// A finger is on the page, as far as the page has been told.
+let fingerDown = false;
+let holdTimer = null;
+// The page whose own selecting is switched off while the reader holds a
+// passage on it (see showHeld).
+let lockedDoc = null;
 // The annotation sheet: { mode: "new" } while it offers to mark a fresh
 // selection; { mode: "view", id } for a passage made earlier, which is shown
 // with the way to its journal rather than opened for editing; { mode: "edit",
@@ -54,10 +71,10 @@ let passageSheet = null;
 // the reader's own coordinates. The sheet docks at whichever edge leaves it in
 // view. Null when nothing on this page is being marked.
 let sheetSpan = null;
-// A passage being carried over a page turn: { doc, index, node, offset,
-// fraction } is where it starts, on a page already left behind. Its end is
-// chosen on the page now showing.
-let carry = null;
+// True while the selection is a passage being carried over a page turn: it
+// starts on a page already left behind, and its end is chosen on the one now
+// showing.
+let carrying = false;
 // True only while the reader itself is turning the page (see ownPageTurns).
 let turningPage = false;
 // Where each passage is drawn in the loaded section, for telling a tap on a
@@ -871,7 +888,7 @@ async function openReader(book, nextVisit = null) {
   // A visit made from inside the reader replaces the book that is open.
   if (readerView) { try { readerView.close(); } catch {} readerView.remove(); readerView = null; }
   closeReaderSheets();
-  pendingSelection = null; sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear();
+  pendingSelection = null; heldTint = null; lockedDoc = null; carrying = false; pressed = null; fingerDown = false; clearTimeout(holdTimer); sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear();
   els.reader.classList.remove("hidden"); document.body.classList.add("reader-open");
   // Re-pull progress from the server before restoring position. The in-memory
   // `progress` map can be stale if this tab has been open while another device
@@ -903,18 +920,22 @@ async function openReader(book, nextVisit = null) {
   readerView.addEventListener("relocate", async (e) => {
     // First real position means the page has rendered — drop the loading overlay.
     els.readerLoading.classList.add("hidden");
-    closeDictPopover();
-    // The page has changed, so whatever was being marked is no longer where it
-    // was. A passage carried over the turn asks for its end on the new page.
-    sheetSpan = null;
     const loc = e.detail || {};
-    if (carry && sectionIndexOf(carry.doc) != null) openCarryBar();
-    else {
-      carry = null;
+    const turned = !!lastRelocateMarker && readerRelocateMarker(loc) !== lastRelocateMarker;
+    const selected = pendingSelection && sectionIndexOf(pendingSelection.doc) != null ? pendingSelection : null;
+    sheetSpan = null;
+    // A passage carried over the turn asks for its end on the new page.
+    if (selected && turned && carrying) openCarryBar();
+    // The same page, laid out again: what is selected is still here, moved.
+    else if (selected && !turned) {
+      sheetSpan = spanInReader(selected.doc, selected.range.getClientRects());
+      placeReaderSheets();
+    } else {
+      // The page has changed, and what was selected has gone with it. Left
+      // behind, it would go on taking taps from somewhere it can't be seen.
+      closeDictPopover();
       closeSelectionBar();
-      // A selection left behind on the page before would go on swallowing taps
-      // and swipes from somewhere it can't be seen.
-      if (pendingSelection && lastRelocateMarker && readerRelocateMarker(loc) !== lastRelocateMarker) dropSelection();
+      if (pendingSelection) dropSelection();
     }
     noteReaderRelocate(loc);
     currentLocation = {
@@ -1110,7 +1131,7 @@ function openTocView(tab = "contents") {
   else els.tocList.scrollTop = 0;
 }
 function closeTocView() { els.tocView.classList.add("hidden"); setPassagesPolling(false); }
-function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; visit = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeReaderSheets(); pendingSelection = null; sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear(); updateVisitBar(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
+function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; visit = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeReaderSheets(); pendingSelection = null; heldTint = null; lockedDoc = null; carrying = false; pressed = null; fingerDown = false; clearTimeout(holdTimer); sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear(); updateVisitBar(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
 function saveReaderSettings() { localStorage.setItem("ebook-library.reader", JSON.stringify(readerSettings)); }
 // Measure a font's average glyph advance once (it never changes for a face), so
 // we can solve for the font size that yields a given characters-per-line measure.
@@ -1475,7 +1496,7 @@ function applyReaderTheme() {
        the first line outside the column, where pagination clips it. */
     p{margin-top:0!important;margin-bottom:1em!important}
     a{color:${dark ? "#9ecbff" : "#0645ad"}}
-    ${highlightRules()}
+    ${highlightRules(dark)}
   `);
   requestAnimationFrame(() => readerView?.renderer?.render?.());
 }
@@ -1579,7 +1600,7 @@ function bookSelecting() {
 function pageTurnTap(e, dictWasOpen) {
   if (readerTapConsumed(dictWasOpen)) return;
   // A tap beside the text while some of it is selected puts the selection away.
-  if (bookSelecting()) { dropSelection(); return; }
+  if (pendingSelection || bookSelecting()) { dropSelection(); return; }
   turnAtHostX(e.clientX);
 }
 onReaderTap(els.hitLeft, pageTurnTap);
@@ -1637,12 +1658,17 @@ function wireReaderInput(doc) {
   // has raised the long-press menu, or that lands while text is selected is
   // withheld from Foliate from then on. Multi-touch stays with the renderer.
   let touchX = 0, touchY = 0, touchAt = 0, touchKind = null;   // "undecided" | "swipe" | "hold"
+  // A finger dragging one end of a selection the reader holds: which end, once
+  // it has moved far enough to say.
+  let drag = null;
   doc.addEventListener("touchstart", (e) => {
+    fingerDown = true;
     const touch = e.touches.length === 1 ? e.changedTouches[0] : null;
-    touchKind = !touch ? null : selecting() ? "hold" : "undecided";
+    touchKind = !touch ? null : selecting() || pendingSelection ? "hold" : "undecided";
     touchX = touch?.clientX || 0;
     touchY = touch?.clientY || 0;
     touchAt = e.timeStamp;
+    drag = touch && pendingSelection?.held && pendingSelection.doc === doc ? { end: null } : null;
   }, true);
   doc.addEventListener("touchmove", (e) => {
     if (!touchKind) return;
@@ -1656,22 +1682,44 @@ function wireReaderInput(doc) {
     // What Foliate would have done with it, minus the scrolling: it leaves a
     // zoomed-in page to be panned.
     if (e.cancelable && (window.visualViewport?.scale ?? 1) === 1) e.preventDefault();
+    const touch = e.changedTouches[0];
+    if (!drag || !touch || !pendingSelection?.held) return;
+    if (!drag.end && Math.abs(touch.clientX - touchX) <= TAP_SLOP_PX && Math.abs(touch.clientY - touchY) <= TAP_SLOP_PX) return;
+    drag.end ||= nearerEnd(pendingSelection.range, touchX, touchY);
+    dragSelection(doc, touch.clientX, touch.clientY, drag.end);
   }, true);
-  doc.addEventListener("touchcancel", () => { touchKind = null; }, true);
+  // The system cancels a touch it is taking for itself, a press-and-drag
+  // selection among them, so a cancel does not say the finger has lifted.
+  doc.addEventListener("touchcancel", () => { touchKind = null; drag = null; }, true);
   doc.addEventListener("touchend", (e) => {
+    fingerDown = e.touches.length > 0;
+    // Dragged to where it now ends: show what goes with the passage as it stands.
+    if (drag?.end && pendingSelection?.held) takeSelection(doc, pendingSelection.index, pendingSelection.range, { hold: true });
+    drag = null;
+    if (!fingerDown) holdWhenFree();
     if (!touchKind) return;
     if (touchKind !== "swipe") e.stopImmediatePropagation();
     touchKind = null;
-    // The tap that ends a carried passage is spent on that: without the click
-    // that would follow it, the page keeps the passage shown as selected.
-    if (carry && e.cancelable) e.preventDefault();
+    // A tap while text is selected is spent on the selection (see the pointerup
+    // below); the click that would follow it is not wanted as well.
+    if (pendingSelection && e.cancelable) e.preventDefault();
   }, true);
 
   let sx = 0, sy = 0, st = 0, moved = false, held = false, tracking = false;
   doc.addEventListener("pointerdown", (e) => {
     if (!e.isPrimary) return;
     tracking = true; moved = false; held = false; sx = e.clientX; sy = e.clientY; st = Date.now();
+    lastPointerType = e.pointerType || "";
+    pressed = { doc, at: st };
   }, true);
+  // Whatever the press did to the selection, take stock of it once it is over.
+  const settle = () => {
+    tracking = false;
+    pressed = null;
+    clearTimeout(dictDebounce);
+    dictDebounce = setTimeout(() => evaluateSelection(doc), 250);
+  };
+  doc.addEventListener("pointercancel", (e) => { if (e.isPrimary) settle(); }, true);
   doc.addEventListener("pointermove", (e) => {
     if (tracking && (Math.abs(e.clientX - sx) > TAP_SLOP_PX || Math.abs(e.clientY - sy) > TAP_SLOP_PX)) moved = true;
   }, true);
@@ -1685,10 +1733,17 @@ function wireReaderInput(doc) {
   doc.addEventListener("pointerup", (e) => {
     if (!tracking) return;
     tracking = false;
+    pressed = null;
     // A drag or long-press is a selection gesture (dictionary), never a tap.
-    if (moved || held || Date.now() - st > TAP_MAX_MS) return;
-    // A passage carried over from the page before ends at the word tapped.
-    if (carry) { endCarryAt(doc, e.clientX, e.clientY); return; }
+    if (moved || held || Date.now() - st > TAP_MAX_MS) { settle(); return; }
+    // While text is selected, a tap on a word moves the selection's end to it,
+    // and a tap on anything else lets the selection go. Either way the tap is
+    // spent. (A carried passage is only let go from its Cancel: there, a stray
+    // tap would throw away what was selected a page ago.)
+    if (pendingSelection?.doc === doc) {
+      if (!selectToTap(doc, e.clientX, e.clientY) && !carrying) { closeReaderSheets(); dropSelection(); }
+      return;
+    }
     if (selecting()) return;
     if (readerTapConsumed()) return;
     // Let foliate handle in-book links.
@@ -1720,38 +1775,227 @@ function followSelection(doc) {
   sheetSpan = span;
   placeReaderSheets();
 }
+function cleanText(text) { return String(text).replace(/\s+/g, " ").trim(); }
+function sameRange(a, b) {
+  try { return a.compareBoundaryPoints(Range.START_TO_START, b) === 0 && a.compareBoundaryPoints(Range.END_TO_END, b) === 0; } catch { return false; }
+}
+// The page's own selection has settled: see what it is now.
 function evaluateSelection(doc) {
   const sel = doc.getSelection();
-  const text = sel && sel.rangeCount && !sel.isCollapsed ? sel.toString().replace(/\s+/g, " ").trim() : "";
-  // A carried passage is held here, not in the selection: the tap that picks
-  // its end is free to clear whatever the page still has selected.
-  if (carry) { if (text && carry.doc === doc) endCarry(doc, sel.getRangeAt(0).endContainer, sel.getRangeAt(0).endOffset); return; }
-  if (!text) { pendingSelection = null; closeDictPopover(); closeSelectionBar(); return; }
+  const text = sel && sel.rangeCount && !sel.isCollapsed ? cleanText(sel.toString()) : "";
+  if (!text) {
+    // Nothing is selected on the page. That is expected when the reader holds
+    // the selection itself, when a passage carried from the page before has
+    // had its end tapped, and for the length of a tap that may be about to
+    // move the selection (the page let go of it when the mouse went down).
+    const tapping = pressed?.doc === doc && Date.now() - pressed.at < TAP_MAX_MS + 250;
+    if (pendingSelection && (pendingSelection.held || carrying || tapping)) return;
+    closeDictPopover();
+    closeSelectionBar();
+    if (pendingSelection) dropSelection();
+    return;
+  }
   const index = sectionIndexOf(doc);
+  if (index == null) return;
   const range = sel.getRangeAt(0).cloneRange();
-  pendingSelection = index == null ? null : { doc, index, range, text, savedId: null };
-  sheetSpan = spanInReader(doc, range.getClientRects());
-  // A single word (surrounding punctuation stripped) is looked up; anything
-  // more is a passage to annotate.
+  // A passage carried over from the page before runs on to the end of
+  // whatever has been selected on this one.
+  if (carrying && pendingSelection?.doc === doc) range.setStart(pendingSelection.range.startContainer, pendingSelection.range.startOffset);
+  // Unless it is the selection already in hand (one the reader set itself).
+  if (!(pendingSelection?.doc === doc && sameRange(range, pendingSelection.range))) takeSelection(doc, index, range);
+  holdWhenFree();
+}
+// ---- Holding the selection ----------------------------------------------
+// On a touchscreen the system lays its own chrome over a selection: the
+// handles, and a bar of Copy, Share and Select all that lands on top of the
+// reader's sheet. So a selection made by a finger is taken over once the
+// finger has lifted: the page paints the range as a highlight of its own (see
+// highlightRules), its selection is let go, and the system's chrome goes with
+// it. Until then it is the system's, so that a press can run on into a drag
+// across the words. Afterwards it is moved by tapping a word or dragging an
+// end (see selectToTap and dragSelection). A mouse's selection is left to the
+// page, which is where Copy looks for it, until a tap moves it.
+const HOLD_QUIET_MS = 1200;
+function canHold(doc) { return !!doc.defaultView?.CSS?.highlights && !!doc.defaultView.Highlight; }
+function holdRange(doc, range) {
+  if (heldTint) { heldTint.set.delete(heldTint.range); heldTint = null; }
+  if (!range) return;
+  const registry = doc.defaultView.CSS.highlights;
+  let set = registry.get(SELECTION_TINT);
+  // Over any highlight already on the same words.
+  if (!set) { set = new doc.defaultView.Highlight(); set.priority = 1; registry.set(SELECTION_TINT, set); }
+  set.add(range);
+  heldTint = { set, range };
+}
+// A single word (surrounding punctuation stripped) is looked up; anything
+// more is a passage to annotate.
+function wordToLookUp(text) {
   const word = text.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "");
-  if (word && !/\s/.test(word) && /^[A-Za-z][A-Za-z'-]*$/.test(word) && word.length <= 64) { closePassageSheet(); lookupWord(word); return; }
+  return word && !/\s/.test(word) && /^[A-Za-z][A-Za-z'-]*$/.test(word) && word.length <= 64 ? word : null;
+}
+// Bring the page in line with the selection in hand: paint it if the reader
+// holds it, and while a finger's passage is held, switch off the page's own
+// selecting. A press-and-hold there would start a new selection under the
+// finger that is trying to drag this one's end. A lone word stays open to it:
+// looking up the next word is a press on that word.
+function showHeld() {
+  const held = pendingSelection?.held ? pendingSelection : null;
+  holdRange(held?.doc, held?.range);
+  const lock = held && lastPointerType === "touch" && (carrying || !wordToLookUp(held.text)) ? held.doc : null;
+  if (lock === lockedDoc) return;
+  for (const [page, value] of [[lockedDoc, ""], [lock, "none"]]) {
+    if (!page?.documentElement) continue;
+    page.documentElement.style.setProperty("-webkit-user-select", value);
+    page.documentElement.style.setProperty("user-select", value);
+  }
+  lockedDoc = lock;
+}
+// The range with a word cut off at either end made whole.
+function wholeWords(range) {
+  const whole = range.cloneRange(), letter = /[\p{L}\p{N}'’]/u;
+  const inWord = (node, at) => node.nodeType === Node.TEXT_NODE && at > 0 && at < node.length && letter.test(node.data[at - 1]) && letter.test(node.data[at]);
+  let { startContainer: node, startOffset: at } = range;
+  if (inWord(node, at)) { while (at > 0 && letter.test(node.data[at - 1])) at -= 1; whole.setStart(node, at); }
+  ({ endContainer: node, endOffset: at } = range);
+  if (inWord(node, at)) { while (at < node.length && letter.test(node.data[at])) at += 1; whole.setEnd(node, at); }
+  return whole;
+}
+// Take a finger's selection over as soon as the finger is off the page. The
+// lift at the end of a press-and-drag never reaches the page, so a pause that
+// long in the selection's changes is taken for one.
+function holdWhenFree() {
+  clearTimeout(holdTimer);
+  const pending = pendingSelection;
+  if (!pending || pending.held || lastPointerType !== "touch" || !canHold(pending.doc)) return;
+  const hold = () => {
+    if (pendingSelection !== pending || pending.held) return;
+    // A drag leaves off wherever the finger was, mid-word as often as not.
+    const range = wholeWords(pending.range);
+    if (!sameRange(range, pending.range)) { takeSelection(pending.doc, pending.index, range, { hold: true }); return; }
+    pending.held = true;
+    showHeld();
+    try { pending.doc.getSelection().removeAllRanges(); } catch {}
+  };
+  if (fingerDown) holdTimer = setTimeout(hold, HOLD_QUIET_MS);
+  else hold();
+}
+// Make `range` the selection being worked on and show the sheet that goes with
+// it: a definition for a single word, the annotation bar for anything more.
+// `hold` is for a range the reader worked out itself, which it then holds;
+// `show` has the page select it instead where the reader can't.
+function takeSelection(doc, index, range, { hold = false, show = false } = {}) {
+  const text = cleanText(range.toString());
+  if (!text) return false;
+  const held = hold && canHold(doc);
+  pendingSelection = { doc, index, range, text, savedId: null, held, fraction: carrying && pendingSelection ? pendingSelection.fraction : currentLocation.fraction || 0 };
+  showHeld();
+  try {
+    if (held) doc.getSelection().removeAllRanges();
+    else if (show) doc.getSelection().setBaseAndExtent(range.startContainer, range.startOffset, range.endContainer, range.endOffset);
+  } catch {}
+  sheetSpan = spanInReader(doc, range.getClientRects());
+  const word = carrying ? null : wordToLookUp(text);
+  if (word) { closePassageSheet(); lookupWord(word); return true; }
   closeDictPopover();
-  if (pendingSelection) openSelectionBar();
+  openSelectionBar();
+  return true;
 }
 function dropSelection() {
+  clearTimeout(holdTimer);
   pendingSelection = null;
+  carrying = false;
+  showHeld();
   try { readerView?.deselect(); } catch {}
 }
+// ---- Moving the selection with a tap or a drag ---------------------------
+// The system's selection handles are the hard part on an e-reader's screen,
+// and they go when the reader takes the selection over. In their place, with
+// text selected: a tap on a word ends the selection at that word, whether that
+// stretches it or cuts it short, and a tap on a word before it starts it
+// there; a finger put down near one end of the selection and dragged moves
+// that end to the word it is over. The first word is picked the usual way,
+// with a press-and-hold.
+function caretAt(doc, x, y) {
+  if (doc.caretPositionFromPoint) {
+    const at = doc.caretPositionFromPoint(x, y);
+    return at && { node: at.offsetNode, offset: at.offset };
+  }
+  const at = doc.caretRangeFromPoint?.(x, y);
+  return at && { node: at.startContainer, offset: at.startOffset };
+}
+// The word at a point of the page, as a range; null where there isn't one.
+function wordAt(doc, x, y) {
+  const at = caretAt(doc, x, y);
+  if (!at || at.node.nodeType !== Node.TEXT_NODE) return null;
+  const text = at.node.data;
+  let start = at.offset, end = at.offset;
+  while (start > 0 && !/\s/.test(text[start - 1])) start -= 1;
+  while (end < text.length && !/\s/.test(text[end])) end += 1;
+  if (start === end) return null;
+  const range = doc.createRange();
+  range.setStart(at.node, start);
+  range.setEnd(at.node, end);
+  // The caret goes to the nearest text from anywhere on the page. Only a tap
+  // on the word itself counts, give or take the space between two lines.
+  const on = [...range.getClientRects()].some((r) => x >= r.left - 6 && x <= r.right + 6 && y >= r.top - r.height * 0.35 && y <= r.bottom + r.height * 0.35);
+  return on ? range : null;
+}
+// The selection with one end moved to `word`: null if that end can't go there
+// (it would pass the other end).
+function rangeMovedTo(range, word, end) {
+  const moved = range.cloneRange();
+  try {
+    if (end === "end") {
+      if (word.compareBoundaryPoints(Range.START_TO_START, range) < 0) return null;
+      moved.setEnd(word.endContainer, word.endOffset);
+    } else {
+      if (word.compareBoundaryPoints(Range.END_TO_END, range) > 0) return null;
+      moved.setStart(word.startContainer, word.startOffset);
+    }
+  } catch { return null; }
+  return moved;
+}
+function selectToTap(doc, x, y) {
+  const pending = pendingSelection, word = wordAt(doc, x, y);
+  if (!word) return false;
+  // At or after the selection's first word, the tapped word is its new last
+  // word. Before it, its new first.
+  const range = rangeMovedTo(pending.range, word, "end") || rangeMovedTo(pending.range, word, "start");
+  return !!range && takeSelection(doc, pending.index, range, { hold: true, show: true });
+}
+// Which end of the selection a finger put down at a point has hold of: the
+// nearer one.
+function nearerEnd(range, x, y) {
+  const rects = [...range.getClientRects()].filter((r) => r.width > 0.5 && r.height > 0.5);
+  if (!rects.length) return "end";
+  const first = rects[0], last = rects[rects.length - 1];
+  const toStart = Math.hypot(x - first.left, y - (first.top + first.bottom) / 2);
+  const toEnd = Math.hypot(x - last.right, y - (last.top + last.bottom) / 2);
+  return toStart < toEnd ? "start" : "end";
+}
+// The finger has moved: the end it has hold of goes to the word it is over.
+// Only the selection is redrawn as it goes, and the words quoted in the bar;
+// the sheet is put right when the finger lifts.
+function dragSelection(doc, x, y, end) {
+  const pending = pendingSelection, word = wordAt(doc, x, y);
+  const range = word && rangeMovedTo(pending.range, word, end);
+  if (!range || sameRange(range, pending.range)) return;
+  pending.range = range;
+  pending.text = cleanText(range.toString());
+  showHeld();
+  const quote = passageSheet?.mode === "new" ? els.passageSheet.querySelector(".ps-quote") : null;
+  if (quote) quote.textContent = quoteOf(pending.text);
+}
 // ---- Where the sheets sit ----------------------------------------------
-// The definition and annotation sheets sit beside the text they are about:
-// just under it, or just over it where there is no room beneath. The eye and
-// the thumb are already there, and the words being marked are never the ones
-// covered. With nothing on the page to sit beside, they dock at the foot of
-// the screen.
+// The definition and annotation sheets sit beside the text they are about,
+// where the eye and the thumb already are, and never on it. Over it for
+// choice: a selection is stretched by tapping a word further on (see
+// selectToTap), so the lines after it are the ones to leave uncovered. With
+// nothing on the page to sit beside, they dock at the foot of the screen.
 const SHEET_EDGE_PX = 12;
-// The gap left under a passage, which the system's selection handles hang
-// into, and the smaller one left over it.
-const SHEET_UNDER_PX = 32, SHEET_OVER_PX = 10;
+// The gap left between a passage and a sheet over it, and the wider one left
+// when the sheet has to go under: three lines or so, still there to be tapped.
+const SHEET_OVER_PX = 10, SHEET_UNDER_PX = 96;
 // Top and bottom, in the reader's coordinates, of the part of some text that
 // is on the page showing. `rects` are in the coordinates of `doc`, whose frame
 // holds the whole chapter side by side, a page to a column.
@@ -1781,9 +2025,11 @@ function placeReaderSheet(el, atTop = false) {
   let top = atTop ? first : null;
   if (top == null && sheetSpan) {
     const height = el.offsetHeight, last = reader.height - SHEET_EDGE_PX - height;
-    const under = sheetSpan.bottom + SHEET_UNDER_PX, over = sheetSpan.top - SHEET_OVER_PX - height;
-    if (under <= last) top = under;
-    else if (over >= first) top = over;
+    const over = sheetSpan.top - SHEET_OVER_PX - height, under = sheetSpan.bottom + SHEET_UNDER_PX;
+    if (over >= first) top = over;
+    else if (under <= last) top = under;
+    // Not that much room beneath: as far down as there is, if that clears it.
+    else if (sheetSpan.bottom + SHEET_OVER_PX <= last) top = last;
     else {
       // A passage that leaves no room either side: the edge that covers less of it.
       const covered = (from) => Math.max(0, Math.min(from + height, sheetSpan.bottom) - Math.max(from, sheetSpan.top));
@@ -1824,7 +2070,9 @@ function showDictPopover(html) {
   // keep, whatever the lookup itself comes back with.
   const save = pendingSelection && currentBook
     ? `<button class="dict-save" type="button"${pendingSelection.savedId ? " disabled" : ""}>${pendingSelection.savedId ? "Saved" : "Save"}</button>` : "";
-  els.dictPopover.innerHTML = `<button class="dict-close" type="button" aria-label="Close definition">Done</button>${save}${html}`;
+  // The way from a word to a passage: the tap that would extend it.
+  const hint = pendingSelection ? `<div class="dict-hint">Tap another word to select through to it.</div>` : "";
+  els.dictPopover.innerHTML = `<button class="dict-close" type="button" aria-label="Close definition">Done</button>${save}${html}${hint}`;
   els.dictPopover.classList.toggle("can-save", !!save);
   els.dictPopover.classList.remove("hidden");
   placeReaderSheets();
@@ -1840,7 +2088,8 @@ function closeDictPopover() { dictReqId++; clearTimeout(dictDebounce); els.dictP
 // record, drawn on the page and filed before the tap returns) and then turns
 // the bar into that passage's sheet. Tapping a mark later opens the same sheet.
 function readerSheetOpen() { return !els.dictPopover.classList.contains("hidden") || !!passageSheet; }
-function closeReaderSheets() { closeDictPopover(); closePassageSheet(); }
+// Both sheets, and with them any selection one of them was about.
+function closeReaderSheets() { closeDictPopover(); closePassageSheet(); if (pendingSelection) dropSelection(); }
 function closeSelectionBar() { if (passageSheet?.mode === "new") closePassageSheet(); }
 function sectionIndexOf(doc) {
   try { return readerView.renderer.getContents().find((c) => c.doc === doc)?.index ?? null; } catch { return null; }
@@ -1906,7 +2155,7 @@ function capturePassage(style, { keepSelection = false } = {}) {
     first = filing.first;
     prompt = !filing.journals.length && !filingDismissed(key);
   }
-  if (!keepSelection) { pendingSelection = null; try { readerView.deselect(); } catch {} }
+  if (!keepSelection) dropSelection();
   return { passage, created, first, prompt };
 }
 // Save on the definition sheet: the word becomes a passage and the definition
@@ -1989,8 +2238,11 @@ function underlineEl(style, r, ink) {
 // (see highlightRules).
 // Passage id -> { set, range }: the highlight a passage's range was added to.
 const tints = new Map();
-function highlightRules() {
-  return store.HIGHLIGHTS.map((h) => `::highlight(honlib-${h.id}){background-color:${h.color};color:#000}`).join("");
+const SELECTION_TINT = "honlib-selection";
+function highlightRules(dark) {
+  return store.HIGHLIGHTS.map((h) => `::highlight(honlib-${h.id}){background-color:${h.color};color:#000}`).join("")
+    // A selection the reader is holding: the page's colours, reversed.
+    + `::highlight(${SELECTION_TINT}){background-color:${dark ? "#fff" : "#000"};color:${dark ? "#000" : "#fff"}}`;
 }
 // Tint `range` in the colour `colorId`, or clear the passage's tint when there
 // is none. False when this document cannot paint highlights itself.
@@ -2090,35 +2342,29 @@ function passageAt(doc, x, y) {
 
 // The sheet.
 const SHEET_TOOLS = [["highlight", "Highlight"], ["underline", "Underline"], ["tag", "Add tag"], ["note", "Add note"]];
-// The selection bar, and the same bar for a passage being carried over a page
-// turn (see continuePassage). Reopening it must not let go of the carry.
+// The bar offered for a selection. A tap on the page moves the selection
+// rather than dismissing the bar, so the bar carries its own way out.
 function showNewSheet(html) {
-  const carried = carry;
-  carry = null;
   closePassageSheet();
-  carry = carried;
   passageSheet = { mode: "new" };
   els.passageSheet.innerHTML = html;
   els.passageSheet.classList.remove("hidden");
   placeReaderSheets();
 }
+// A long passage is quoted by where it starts and where it now ends.
+function quoteOf(text) { return text.length <= 140 ? text : `${text.slice(0, 70).trimEnd()} … ${text.slice(-60).trimStart()}`; }
 function openSelectionBar() {
-  const text = pendingSelection.text;
-  // A carried passage shows where it starts and where it now ends.
-  const quote = text.length <= 140 ? text
-    : carry ? `${text.slice(0, 70).trimEnd()} … ${text.slice(-60).trimStart()}`
-    : `${text.slice(0, 140).trimEnd()}…`;
-  showNewSheet(`<div class="ps-head"><div class="ps-quote">${escapeHtml(quote)}</div>${carry ? `<button type="button" class="ps-close" data-ps-close>Cancel</button>` : ""}</div>` +
+  showNewSheet(`<div class="ps-head"><div class="ps-quote">${escapeHtml(quoteOf(pendingSelection.text))}</div><button type="button" class="ps-close" data-ps-close>Cancel</button></div>` +
     `<div class="ps-bar">${SHEET_TOOLS.map(([tool, label]) => `<button type="button" data-ps-new="${tool}">${label}</button>`).join("")}</div>` +
     (reachesPageEnd(pendingSelection) ? `<button type="button" class="ps-continue" data-ps-continue>Continue on next page</button>` : "") +
-    (carry ? `<div class="ps-status">Tap another word to move the end.</div>` : ""));
+    `<div class="ps-status">Tap a word to end the passage there.</div>`);
 }
 // ---- A passage that runs on to the next page ---------------------------
 // The page never turns under a selection (see ownPageTurns), so a passage that
 // crosses the page break is carried across on request. Selecting to the foot
 // of the page offers "Continue on next page"; that turns the page and asks for
-// the last word of the passage, by a tap, which an e-reader's screen takes far
-// more reliably than a second press-and-hold.
+// the last word of the passage, by the same tap that moves a selection's end
+// on one page (see selectToTap).
 function reachesPageEnd(pending) {
   try {
     const visible = readerView.lastLocation?.range, renderer = readerView.renderer;
@@ -2134,49 +2380,15 @@ function reachesPageEnd(pending) {
   } catch { return false; }
 }
 function continuePassage() {
-  const pending = pendingSelection;
-  if (!pending || !readerView) return;
-  carry = carry || { doc: pending.doc, index: pending.index, node: pending.range.startContainer, offset: pending.range.startOffset, fraction: currentLocation.fraction || 0 };
+  if (!pendingSelection || !readerView) return;
+  carrying = true;
   // The relocation this causes opens the carry bar on the new page.
   turnPage(() => readerView.next());
 }
 function openCarryBar() {
-  const text = pendingSelection?.text || "";
+  const text = pendingSelection.text;
   showNewSheet(`<div class="ps-head"><div class="ps-quote">${escapeHtml(text.length > 140 ? `${text.slice(0, 140).trimEnd()}…` : text)}</div><button type="button" class="ps-close" data-ps-close>Cancel</button></div>` +
     `<div class="ps-status">Tap the last word of the passage.</div>`);
-}
-function caretAt(doc, x, y) {
-  if (doc.caretPositionFromPoint) {
-    const at = doc.caretPositionFromPoint(x, y);
-    return at && { node: at.offsetNode, offset: at.offset };
-  }
-  const at = doc.caretRangeFromPoint?.(x, y);
-  return at && { node: at.startContainer, offset: at.startOffset };
-}
-function endCarryAt(doc, x, y) {
-  if (carry.doc !== doc) return;
-  const at = caretAt(doc, x, y);
-  if (!at || at.node.nodeType !== Node.TEXT_NODE) return;
-  // Through to the end of the word that was tapped.
-  const rest = at.node.data.slice(at.offset).search(/\s/);
-  endCarry(doc, at.node, rest < 0 ? at.node.data.length : at.offset + rest);
-}
-function endCarry(doc, node, offset) {
-  const range = doc.createRange();
-  try { range.setStart(carry.node, carry.offset); range.setEnd(node, offset); } catch { return; }
-  // An end before the start leaves nothing between them.
-  const text = range.toString().replace(/\s+/g, " ").trim();
-  if (!text) return;
-  // Setting the selection below comes back round as a selection change; the
-  // bar is already showing this very passage then, and is left alone.
-  const was = pendingSelection?.range;
-  const same = !!was && !!els.passageSheet.querySelector("[data-ps-new]")
-    && was.compareBoundaryPoints(Range.START_TO_START, range) === 0 && was.compareBoundaryPoints(Range.END_TO_END, range) === 0;
-  pendingSelection = { doc, index: carry.index, range, text, savedId: null, fraction: carry.fraction };
-  // Shown as selected, where the page will hold a selection it did not make.
-  try { doc.getSelection().setBaseAndExtent(range.startContainer, range.startOffset, range.endContainer, range.endOffset); } catch {}
-  sheetSpan = spanInReader(doc, range.getClientRects());
-  if (!same) openSelectionBar();
 }
 function captureFromBar(tool) {
   const last = lastStyle();
@@ -2247,9 +2459,6 @@ function closePassageSheet() {
   if (!sheet) return;
   const hadFocus = els.passageSheet.contains(document.activeElement);
   passageSheet = null;
-  // Closing the sheet abandons a passage being carried over a page turn, and
-  // the part of it still selected on the page before.
-  if (carry) { carry = null; dropSelection(); }
   sheet.handle?.commit?.();
   els.passageSheet.classList.add("hidden");
   els.passageSheet.innerHTML = "";
@@ -2512,6 +2721,8 @@ function onJournalChange() {
 document.addEventListener("pointerdown", (e) => {
   if (!els.dictPopover.classList.contains("hidden") && !els.dictPopover.contains(e.target)) closeDictPopover();
   if (passageSheet && !els.passageSheet.contains(e.target)) closePassageSheet();
+  // A selection goes when the sheet that was about it is put away.
+  if (pendingSelection && !readerSheetOpen()) dropSelection();
   if (!els.readerFonts.classList.contains("hidden") && !els.readerFonts.contains(e.target) && !e.target.closest('[data-role="font-menu"]')) closeReaderFontMenu();
   if (!els.readerRefreshPanel.classList.contains("hidden") && !els.readerRefreshPanel.contains(e.target) && !e.target.closest("#reader-refresh")) closeReaderRefreshMenu();
 });
@@ -2620,7 +2831,7 @@ function turnPage(go) {
   try { return go(); } finally { turningPage = false; }
 }
 // A passage being carried forward keeps its sheet through a turn of the page.
-function readerNext() { if (readerView) { if (!carry) closePassageSheet(); turnPage(() => readerView.goRight()); } }
+function readerNext() { if (readerView) { if (!carrying) closePassageSheet(); turnPage(() => readerView.goRight()); } }
 function readerPrev() { if (readerView) { closePassageSheet(); turnPage(() => readerView.goLeft()); } }
 // Hook a native wrapper (e.g. an Android WebView that captures the BOOX volume
 // buttons) can call: window.ebookTurnPage('next' | 'prev').

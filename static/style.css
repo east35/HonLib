@@ -66,6 +66,7 @@
 .dict-defs{margin:4px 0 0;padding-left:20px}
 .dict-defs li{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden;margin:2px 0}
 .dict-status{margin-top:6px;opacity:.85}
+.dict-hint{margin-top:10px;font-size:13px;opacity:.85}
 .dict-attribution{margin-top:10px;padding-top:8px;border-top:1px solid currentColor;font-size:11px;line-height:1.3}
 /* E-ink panels render the default link blue as an illegible mid-grey, so the
    attribution links take the panel foreground with an underline instead. */

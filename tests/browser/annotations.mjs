@@ -166,17 +166,18 @@ async function tapsOnAndOffTheMark(page, name, passageId) {
   return passageId;
 }
 
-// The annotation bar sits beside the text it is about: just under it, or just
-// over it where there is no room beneath, and never on it. The reading menu,
-// which lives at the foot of the page, gets out of the way.
+// The annotation bar sits beside the text it is about and never on it: just
+// over it, leaving the lines that follow free to be tapped, or under it where
+// there is no room above. The reading menu, which lives at the foot of the
+// page, gets out of the way.
 async function sheetsSitBeside(page, name) {
-  const NEAR = 60;
+  const NEAR = 30;
+  const over = (seen) => seen.sheet.bottom <= seen.selection.top && seen.selection.top - seen.sheet.bottom < NEAR;
   await page.evaluate(() => document.querySelector("#reader").classList.remove("chrome-hidden"));
-  // The last lines of the page: no room under them, so the bar goes over them.
+  // The last lines of the page.
   await selectPageEnd(page, 200);
   let seen = await sheetAndSelection(page);
-  assert.ok(seen.sheet.bottom <= seen.selection.top, `${name}: the annotation bar covers a selection at the foot of the page (${JSON.stringify(seen)})`);
-  assert.ok(seen.selection.top - seen.sheet.bottom < NEAR, `${name}: the annotation bar is not beside the selection (${JSON.stringify(seen)})`);
+  assert.ok(over(seen), `${name}: the annotation bar is not just over a selection at the foot of the page (${JSON.stringify(seen)})`);
   assert.equal(await page.locator("#reader").evaluate((el) => el.classList.contains("chrome-hidden")), true, `${name}: the reading menu stayed up over a selection`);
   // It stays there as the sheet that edits the passage, and when tapped later.
   const marked = seen.selection;
@@ -204,11 +205,10 @@ async function sheetsSitBeside(page, name) {
   await page.locator("[data-ps-delete]").click();
   await waitForJournal((s) => !s.passages.some((p) => p.id === made.id), "the foot-of-page passage deleted");
 
-  // Near the top of the page there is room beneath, and that is where it goes.
-  await selectText(page, "#one-p0", 17, 90);
+  // In mid-page too it goes over the selection, not onto what follows it.
+  await selectText(page, "#one-p1", 100, 160);
   seen = await sheetAndSelection(page);
-  assert.ok(seen.sheet.top >= seen.selection.bottom, `${name}: the annotation bar covers a selection at the top of the page (${JSON.stringify(seen)})`);
-  assert.ok(seen.sheet.top - seen.selection.bottom < NEAR, `${name}: the annotation bar is not just under the selection (${JSON.stringify(seen)})`);
+  assert.ok(over(seen), `${name}: the annotation bar is not just over a selection in mid-page (${JSON.stringify(seen)})`);
   // The definition sheet follows the same rule. (The dictionary is a
   // third-party service; any answer will do.)
   const lookup = (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ notFound: true }) });
@@ -216,10 +216,97 @@ async function sheetsSitBeside(page, name) {
   await selectText(page, "#one-p1", 17, 23);
   await page.locator("#dict-popover").waitFor({ state: "visible" });
   seen = await sheetAndSelection(page, "#dict-popover");
-  assert.ok(seen.sheet.top >= seen.selection.bottom && seen.sheet.top - seen.selection.bottom < NEAR, `${name}: the definition is not just under its word (${JSON.stringify(seen)})`);
-  await page.evaluate(() => document.querySelector("foliate-view").deselect());
+  assert.ok(over(seen), `${name}: the definition is not just over its word (${JSON.stringify(seen)})`);
+  await page.locator("#dict-popover .dict-close").click();
   await page.locator("#dict-popover").waitFor({ state: "hidden" });
   await page.unroute("**/api/dictionary/*", lookup);
+
+  // On the first line of a page there is no room above. It goes under, a few
+  // lines down, so that the words after the selection can still be tapped.
+  await page.evaluate(() => window.ebookTurnPage("next"));
+  await settled(page);
+  await page.evaluate(() => {
+    const view = document.querySelector("foliate-view");
+    const visible = view.lastLocation.range, doc = visible.startContainer.ownerDocument;
+    // The page may open on the break between two paragraphs.
+    let node = visible.startContainer, from = visible.startOffset;
+    if (node.nodeType !== Node.TEXT_NODE || node.length - from < 12) {
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+      walker.currentNode = node;
+      do { node = walker.nextNode(); } while (node && !node.data.trim());
+      from = 0;
+    }
+    const range = doc.createRange();
+    range.setStart(node, from);
+    range.setEnd(node, Math.min(node.length, from + 40));
+    const selection = doc.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  await page.locator("#passage-sheet").waitFor({ state: "visible" });
+  seen = await sheetAndSelection(page);
+  const gap = seen.sheet.top - seen.selection.bottom;
+  assert.ok(gap >= 60 && gap < 130, `${name}: under a selection at the top of the page, the annotation bar should leave a few lines clear (${JSON.stringify(seen)})`);
+  await page.locator("#passage-sheet [data-ps-close]").click();
+  assert.equal(await sheetOpen(page), false, `${name}: Cancel left the annotation bar up`);
+  await page.evaluate(() => window.ebookTurnPage("prev"));
+  await settled(page);
+}
+
+// With text selected, a tap on a word moves the selection to it: its end, or
+// its start for a word before it. That is how a passage is stretched on a
+// screen where dragging handles is hard work. A tap on anything else lets the
+// selection go, and neither turns the page.
+async function tapsMoveTheSelection(page, name) {
+  const start = await readState(page);
+  const quote = () => page.locator("#passage-sheet .ps-quote").textContent();
+  const tap = async (selector, offset) => {
+    const point = await pointInText(page, selector, offset);
+    await page.mouse.click(point.x, point.y);
+  };
+  // "One paragraph 1. Filler text that exists only to make this section long…"
+  await selectText(page, "#one-p1", 17, 33);
+  assert.equal(await quote(), "Filler text that");
+  assert.equal(await page.locator("#passage-sheet .ps-status").textContent(), "Tap a word to end the passage there.");
+  await tap("#one-p1", 61);
+  assert.equal(await quote(), "Filler text that exists only to make this section", `${name}: a tap on a later word did not end the selection there`);
+  await tap("#one-p1", 42);
+  assert.equal(await quote(), "Filler text that exists only", `${name}: a tap inside the selection did not shorten it`);
+  await tap("#one-p1", 6);
+  assert.equal(await quote(), "paragraph 1. Filler text that exists only", `${name}: a tap before the selection did not start it there`);
+  assert.equal(await movedFrom(page, start, 500), false, `${name}: moving the selection turned the page`);
+  // What is saved is what the taps arrived at.
+  const before = (await journalState()).passages.length;
+  await page.locator('[data-ps-new="underline"]').click();
+  const made = (await waitForJournal((s) => s.passages.length === before + 1 && s, "the tapped-out passage")).passages.find((p) => p.text.startsWith("paragraph 1."));
+  assert.equal(made?.text, "paragraph 1. Filler text that exists only", `${name}: the passage saved is not the one the taps selected`);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("[data-ps-delete]").click();
+  await waitForJournal((s) => s.passages.length === before, "the tapped-out passage deleted");
+
+  // From a single word, whose sheet is its definition, the same tap makes a passage.
+  const lookup = (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ notFound: true }) });
+  await page.route("**/api/dictionary/*", lookup);
+  await selectText(page, "#one-p1", 17, 23);
+  assert.equal(await page.locator("#dict-popover .dict-hint").textContent(), "Tap another word to select through to it.");
+  await tap("#one-p1", 31);
+  await page.locator('#passage-sheet [data-ps-new="highlight"]').waitFor();
+  assert.equal(await quote(), "Filler text that", `${name}: a tap from a looked-up word did not make a passage`);
+  assert.equal(await page.locator("#dict-popover").isVisible(), false);
+  await page.unroute("**/api/dictionary/*", lookup);
+
+  // Beside the chapter heading there is no word: the tap lets the selection go.
+  const blank = await page.evaluate(() => {
+    const doc = document.querySelector("foliate-view").renderer.getContents()[0].doc;
+    const range = doc.createRange();
+    range.selectNodeContents(doc.querySelector("h1"));
+    const rect = range.getClientRects()[0], frame = doc.defaultView.frameElement.getBoundingClientRect();
+    return { x: frame.left + rect.right + 160, y: frame.top + rect.top + rect.height / 2 };
+  });
+  await page.mouse.click(blank.x, blank.y);
+  assert.equal(await sheetOpen(page), false, `${name}: a tap off the text did not put the selection away`);
+  assert.equal(await page.evaluate(() => document.querySelector("foliate-view").renderer.getContents()[0].doc.getSelection().isCollapsed), true);
+  assert.equal(await movedFrom(page, start, 700), false, `${name}: the tap that put the selection away also turned the page`);
 }
 
 // The page does not turn under a selection. A passage that runs past the foot
@@ -399,6 +486,8 @@ async function fingerHolds(browser, name) {
   if (name !== "chromium") return;
   const context = await browser.newContext({ serviceWorkers: "block", hasTouch: true, isMobile: true, viewport: { width: 800, height: 1000 } });
   const page = await context.newPage();
+  // A held finger may select a word, which is looked up; any answer will do.
+  await page.route("**/api/dictionary/*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ notFound: true }) }));
   await openBook(page, BOOKS.first);
   await hideChrome(page);
   await page.evaluate(async () => { await document.querySelector("foliate-view").goTo(0); });
@@ -406,8 +495,12 @@ async function fingerHolds(browser, name) {
   const cdp = await context.newCDPSession(page);
   const touch = (type, x, y) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
   const at = await pointInText(page, "#one-p1", 300);
+  // By its own button: a selection the reader holds is not the page's to drop.
   const putAway = async () => {
-    await page.evaluate(() => document.querySelector("foliate-view").deselect());
+    await page.evaluate(() => {
+      (document.querySelector("#passage-sheet [data-ps-close]") || document.querySelector("#dict-popover:not(.hidden) .dict-close"))?.click();
+      document.querySelector("foliate-view").deselect();
+    });
     await page.waitForFunction(() => document.querySelector("#passage-sheet").classList.contains("hidden") && document.querySelector("#dict-popover").classList.contains("hidden"));
   };
 
@@ -437,6 +530,63 @@ async function fingerHolds(browser, name) {
   assert.equal(await movedFrom(page, start, 1200), false, `${name}: a drag across the page with text selected turned it`);
   await putAway();
 
+  // A finger's selection is taken over by the reader: the page lets go of its
+  // own, and with it the system's handles and its Copy / Share / Select all
+  // bar, which would sit on top of the annotation bar. The passage is shown as
+  // a highlight instead, and moved by taps.
+  const held = () => page.evaluate(() => {
+    const doc = document.querySelector("foliate-view").renderer.getContents()[0].doc;
+    const set = doc.defaultView.CSS.highlights.get("honlib-selection");
+    return { page: doc.getSelection().toString(), reader: set ? [...set].map((r) => r.toString().replace(/\s+/g, " ").trim()) : [] };
+  });
+  // Not while the finger is still down, though: a press runs on into a drag
+  // across the words, and that is the system's to do.
+  const finger = (type) => page.evaluate((type) => {
+    const doc = document.querySelector("foliate-view").renderer.getContents()[0].doc;
+    const touch = new Touch({ identifier: 7, target: doc.body, clientX: 5, clientY: 5 });
+    doc.body.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches: type === "touchstart" ? [touch] : [], changedTouches: [touch] }));
+  }, type);
+  await finger("touchstart");
+  await selectText(page, "#one-p0", 17, 33);
+  await page.waitForTimeout(300);
+  assert.deepEqual(await held(), { page: "Filler text that", reader: [] }, `${name}: the selection was taken from under a finger still on the page`);
+  await finger("touchend");
+  assert.deepEqual(await held(), { page: "", reader: ["Filler text that"] }, `${name}: a finger's selection was left to the system after it lifted`);
+  // A drag stops wherever the finger was; a word cut off at either end is made whole.
+  await page.evaluate(() => document.querySelector("#passage-sheet [data-ps-close]").click());
+  await selectText(page, "#one-p0", 19, 31);
+  assert.deepEqual(await held(), { page: "", reader: ["Filler text that"] }, `${name}: a selection ending mid-word was not rounded out to whole words`);
+  const tapWord = async (offset) => {
+    const point = await pointInText(page, "#one-p0", offset);
+    await page.touchscreen.tap(point.x, point.y);
+    return (await held()).reader[0];
+  };
+  // A tap on a later word stretches it; a tap on a word inside it cuts it short.
+  assert.equal(await tapWord(61), "Filler text that exists only to make this section", `${name}: a finger's tap did not move the selection`);
+  assert.equal(await tapWord(42), "Filler text that exists only", `${name}: a finger's tap inside the selection did not shorten it`);
+  assert.equal(await movedFrom(page, start, 600), false, `${name}: a finger's tap on a word turned the page with text selected`);
+  // A finger put down on the end of it and dragged takes the end with it, on
+  // and back again.
+  const dragEnd = async (from, to) => {
+    const a = await pointInText(page, "#one-p0", from), b = await pointInText(page, "#one-p0", to);
+    await touch("touchStart", a.x, a.y);
+    await touch("touchMove", (a.x + b.x) / 2, (a.y + b.y) / 2);
+    await touch("touchMove", b.x, b.y);
+    await touch("touchEnd");
+    return (await held()).reader[0];
+  };
+  assert.equal(await dragEnd(44, 61), "Filler text that exists only to make this section", `${name}: dragging the end of the selection did not stretch it`);
+  assert.equal(await dragEnd(64, 30), "Filler text that", `${name}: dragging the end of the selection back did not shorten it`);
+  assert.equal(await tapWord(61), "Filler text that exists only to make this section");
+  assert.equal(await page.locator("#passage-sheet .ps-quote").textContent(), "Filler text that exists only to make this section");
+  assert.equal(await movedFrom(page, start, 600), false, `${name}: dragging the selection turned the page`);
+  const count = (await journalState()).passages.length;
+  await page.locator('[data-ps-new="highlight"]').tap();
+  const kept = (await waitForJournal((s) => s.passages.length === count + 1 && s, "the finger's passage")).passages.find((p) => p.text.endsWith("this section"));
+  assert.equal(kept?.text, "Filler text that exists only to make this section", `${name}: the passage a finger tapped out was not what was saved`);
+  assert.deepEqual((await held()).reader, [], `${name}: the selection was still shown after the passage was made`);
+  await page.locator("[data-ps-close]").tap();
+
   // None of which has cost the swipe.
   await touch("touchStart", at.x + 100, at.y);
   await touch("touchMove", at.x - 200, at.y);
@@ -460,6 +610,7 @@ async function runEngine(name, engine) {
     await marksShowTheirText(page, name);
     await tapsOnAndOffTheMark(page, name, passageId);
     await sheetsSitBeside(page, name);
+    await tapsMoveTheSelection(page, name);
     await passageAcrossPages(page, name);
     const wordId = await saveFromDefinition(page, name);
     await survivesReloadAndDelete(page, name, passageId, wordId);
