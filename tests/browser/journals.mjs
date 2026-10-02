@@ -134,6 +134,20 @@ async function filing(page, name) {
   assert.equal(await page.locator("#passage-sheet .filing-lead").count(), 0, `${name}: a covered book still asked where to file`);
   assert.equal(await page.locator("#passage-sheet .ps-status").textContent(), "In My First Journal, Wayfarers notes");
   await waitForJournal((s) => s.passages.some((p) => p.journals.length === 2), "the passage in both journals");
+  // Both by default, but each passage can be kept out of one of them.
+  const journalsTool = page.locator('#passage-sheet [data-ps-tool="journals"]');
+  assert.equal(await journalsTool.textContent(), "Journals (2)", `${name}: a passage in two journals does not offer the choice between them`);
+  await journalsTool.click();
+  const inFirst = page.locator("#passage-sheet .journals-tool [data-journal-toggle]", { hasText: "My First Journal" });
+  assert.equal(await inFirst.getAttribute("aria-pressed"), "true");
+  await inFirst.click();
+  assert.equal(await page.locator("#passage-sheet .ps-status").textContent(), "In Wayfarers notes", `${name}: the passage was not taken out of the one journal`);
+  assert.equal(await journalsTool.textContent(), "Journals (1)");
+  await waitForJournal((s) => !s.passages.some((p) => p.journals.length === 2), "the passage in one journal only");
+  // The book is still a source of both: the next highlight goes into each again.
+  await inFirst.click();
+  assert.equal(await page.locator("#passage-sheet .ps-status").textContent(), "In Wayfarers notes, My First Journal");
+  await waitForJournal((s) => s.passages.some((p) => p.journals.length === 2), "the passage back in both journals");
   await page.locator("[data-ps-close]").click();
   await closeBook(page);
   return series;
@@ -171,7 +185,7 @@ async function unfiledTray(page, name) {
     `${name}: the tray's passage menu changed`,
   );
   await cardMenu(first, "file");
-  await first.locator('.passage-tool [data-file-into]', { hasText: "My First Journal" }).click();
+  await first.locator('.passage-tool [data-journal-toggle]', { hasText: "My First Journal" }).click();
   await page.waitForFunction(() => document.querySelectorAll("#journal-cards .passage-card").length === 1);
   await waitForJournal((s) => s.passages.filter((p) => p.journals.length === 0).length === 1, "one passage filed from the tray");
   await page.locator("#journal-back").click();
@@ -360,7 +374,7 @@ async function cardLayout(page, name) {
   await first.locator('[data-act="menu"]').click();
   assert.deepEqual(
     await menu.locator("[data-act]").allTextContents(),
-    ["Add to clipboard", "View in book", "Remove from journal", "Delete passage"],
+    ["Add to clipboard", "View in book", "Choose journals", "Remove from journal", "Delete passage"],
     `${name}: the passage menu changed`,
   );
   assert.equal(await first.locator('[data-act="menu"]').getAttribute("aria-expanded"), "true");
@@ -376,6 +390,20 @@ async function cardLayout(page, name) {
   await page.waitForFunction(() => /^(Added to clipboard|Couldn't copy)$/.test(document.querySelector('#journal-cards .passage-menu [data-act="copy"]').textContent));
   await menu.waitFor({ state: "hidden" });
   assert.equal(await menu.locator('[data-act="copy"]').textContent(), "Add to clipboard");
+
+  // "Choose journals" puts one passage into another journal, or takes it out,
+  // without touching what either journal collects.
+  const orphan = card(page, "A line from a book");
+  const membership = async () => Object.fromEntries(await orphan.locator(".journals-tool [data-journal-toggle]").evaluateAll((chips) => chips.map((c) => [c.textContent, c.getAttribute("aria-pressed")])));
+  const journalsOf = (s) => s.passages.find((p) => p.text.startsWith("A line from a book")).journals.length;
+  await cardMenu(orphan, "file");
+  assert.deepEqual(await membership(), { "My First Journal": "false", "Wayfarers notes": "true" }, `${name}: the journals a passage is in are not shown`);
+  await orphan.locator("[data-journal-toggle]", { hasText: "My First Journal" }).click();
+  await waitForJournal((s) => journalsOf(s) === 2, "the passage shared into a second journal");
+  assert.deepEqual(await membership(), { "My First Journal": "true", "Wayfarers notes": "true" });
+  await orphan.locator("[data-journal-toggle]", { hasText: "My First Journal" }).click();
+  await waitForJournal((s) => journalsOf(s) === 1, "the passage taken back out");
+  await page.keyboard.press("Escape");
 
   // Centred, not against the left edge.
   const centred = async () => page.locator("#journal-cards .passage-card").evaluateAll((cards) => {

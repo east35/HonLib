@@ -389,7 +389,7 @@ const ICONS = {
 // A card is a heading and a panel. The heading says where the passage is from
 // and how it is marked, and holds the overflow menu: everything done to the
 // passage as a whole (copy, open its page, take it out of the journal, delete
-// it). The panel is the passage itself, and each part of it is its own
+// it, choose its journals). The panel is the passage itself, and each part of it is its own
 // control: the quote opens its style, the note opens for editing, a tag comes
 // off, and "Add Tag" / "Add Note" sit where a tag or a note would be.
 // Heading and body are redrawn only when what they say changes, and the open
@@ -407,7 +407,9 @@ function cardHeadHtml(p, state) {
     <div class="passage-meta"><span class="passage-style">${esc(store.styleLabel(p.style))}</span>${stateInfo ? `<span class="passage-state" title="${esc(stateInfo.hint)}">${STATE_ICONS[state]}${esc(stateInfo.label)}</span>` : ""}</div>
     <button type="button" class="passage-menu-btn" data-act="menu" aria-haspopup="menu" aria-expanded="${open}" aria-label="Passage options" title="Passage options">${ICONS.more}</button>
     <div class="passage-menu${open ? "" : " hidden"}" role="menu">${item("copy", COPY_LABEL)}${item("visit", "View in book", state === "book-missing")}${
-      view.id === UNFILED ? item("file", "Add to journal") : item("remove", "Remove from journal")}${item("delete", "Delete passage")}</div>`;
+      view.id === UNFILED ? item("file", "Add to journal")
+        // With more than one journal there is a choice of which the passage is in.
+        : `${store.journals().length > 1 ? item("file", "Choose journals") : ""}${item("remove", "Remove from journal")}`}${item("delete", "Delete passage")}</div>`;
 }
 function cardBodyHtml(p) {
   const h = store.highlightById(p.style?.highlight);
@@ -495,28 +497,45 @@ function openCardTool(card, kind) {
   // The card shows the passage's tags itself, each one removable where it is.
   else if (kind === "tags") handle = mountTagTool(slot, passageId, { chips: false });
   else if (kind === "style") handle = mountStyleTool(slot, passageId);
-  else handle = mountAddToJournal(slot, passageId);
+  else handle = mountJournalsTool(slot, passageId);
   view.tool = { passageId, kind, handle };
   handle?.focus?.();
 }
-// In the Unfiled tray: put a passage into a journal. This files the passage
-// only; making the journal collect from the book is done in its settings.
-function mountAddToJournal(el, passageId) {
+// Which journals a passage is in: a switch to each journal. A passage goes into
+// every journal that covers its book when it is made; this is where it is kept
+// out of one of them, or put into another. In none, it waits in Unfiled. Only
+// the passage moves: what a journal collects from is set in its settings.
+export function mountJournalsTool(el, passageId) {
   const root = document.createElement("div");
-  root.className = "filing-journals";
-  root.innerHTML = store.journals().map((j) => `<button type="button" class="btn" data-file-into="${esc(j.id)}">${esc(j.name)}</button>`).join("")
-    + `<button type="button" class="btn" data-file-new>New Journal</button>`;
+  root.className = "journals-tool";
+  // Named, so that on a card the switches are not taken for tags.
+  root.innerHTML = `<span class="drawer-label" id="journals-of-${esc(passageId)}">In journals</span><div class="tag-chips" role="group" aria-labelledby="journals-of-${esc(passageId)}"></div>`;
+  const draw = () => {
+    const p = store.passage(passageId);
+    if (!p) return;
+    const member = store.journalIdsOf(p);
+    root.lastElementChild.innerHTML = store.journals().map((j) => {
+      const on = member.includes(j.id);
+      return `<button type="button" class="tag-chip${on ? " on" : ""}" data-journal-toggle="${esc(j.id)}" aria-pressed="${on}">${esc(j.name)}</button>`;
+    }).join("") + `<button type="button" class="tag-chip passage-add" data-file-new>New Journal${ICONS.plus}</button>`;
+  };
   root.addEventListener("click", (e) => {
-    const into = e.target.closest("[data-file-into]");
-    let id = into?.dataset.fileInto;
-    if (!id && e.target.closest("[data-file-new]")) {
+    const p = store.passage(passageId);
+    if (!p) return;
+    const toggle = e.target.closest("[data-journal-toggle]");
+    if (toggle) {
+      const id = toggle.dataset.journalToggle;
+      if (store.journalIdsOf(p).includes(id)) store.removeFromJournal(passageId, id);
+      else store.addToJournal(passageId, id);
+    } else if (e.target.closest("[data-file-new]")) {
       const name = prompt("Name the new journal", "");
       if (name === null || !name.trim()) return;
-      id = store.createJournal(name).id;
-    }
-    if (id) store.addToJournal(passageId, id);
+      store.addToJournal(passageId, store.createJournal(name).id);
+    } else return;
+    draw();
   });
   el.replaceChildren(root);
+  draw();
   return { commit() {} };
 }
 

@@ -291,8 +291,9 @@ body.journal-open{overflow:hidden}
 .passage-note{order:3;display:flex;align-items:flex-start;gap:10px;border-left:6px solid var(--fg);padding:6px 0 6px 12px;font-weight:700;cursor:pointer}
 .passage-note-text{min-width:0;padding-top:2px;white-space:pre-wrap;overflow-wrap:anywhere}
 .passage-tags{order:5}
-.passage-tags .tag-chip{gap:10px;min-height:42px;padding:6px 12px;font-size:14px;cursor:pointer}
-.passage-tags .tag-chip svg{width:16px;height:16px;flex:0 0 auto;pointer-events:none}
+.journals-tool{display:flex;flex-direction:column;gap:8px}
+.passage-tags .tag-chip,.journals-tool .tag-chip{gap:10px;min-height:42px;padding:6px 12px;font-size:14px;cursor:pointer}
+.passage-tags .tag-chip svg,.journals-tool .tag-chip svg{width:16px;height:16px;flex:0 0 auto;pointer-events:none}
 .passage-tool{order:6}
 .passage-tool.hidden{display:none}
 .passage-card.tool-style .passage-tool{order:2}

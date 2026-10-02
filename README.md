@@ -182,7 +182,10 @@ page turns, and a tap on the passage's last word finishes it.
   **Add Note** where one would be; the **⋯** menu has the rest (add to
   clipboard, view in book, remove from journal, delete). Each journal has *sources*: single
   books, whole series, or whole authors (series and authors include books you
-  add later). A highlight goes into every journal that covers its book. The
+  add later). A highlight goes into every journal that covers its book, and
+  any one passage can then be kept out of a journal or put into another
+  (**Journals** on its sheet in the reader, **Choose journals** in its menu in a
+  journal). The
   first highlight you ever make creates "My First Journal"; a highlight in a
   book no journal covers is saved and you're offered a journal for it, or it
   waits in **Unfiled**.

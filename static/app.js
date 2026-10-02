@@ -1,7 +1,7 @@
 import "./vendor/foliate-js/view.js";
 import * as CFI from "./vendor/foliate-js/epubcfi.js";
 import * as store from "./journal-store.js";
-import { UNFILED, dismissLoweredJournal, filingDismissed, initJournals, journalOverReader, lastStyle, lowerJournal, mountFilingTool, mountNoteTool, mountStyleTool, mountTagTool, openJournal, quoteHtml, raiseJournal, renderShelf } from "./journal.js";
+import { UNFILED, dismissLoweredJournal, filingDismissed, initJournals, journalOverReader, lastStyle, lowerJournal, mountFilingTool, mountJournalsTool, mountNoteTool, mountStyleTool, mountTagTool, openJournal, quoteHtml, raiseJournal, renderShelf } from "./journal.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -2234,7 +2234,9 @@ function openPassageSheet(id, tool = null, { notice = "", then = null } = {}) {
   sheetSpan = markSpan(id) || sheetSpan;
   passageSheet = { mode: "edit", id, tool: null, handle: null, notice, then };
   els.passageSheet.innerHTML = `<div class="ps-head"><div class="ps-quote"></div><button type="button" class="ps-close" data-ps-close>Done</button></div>` +
-    `<div class="ps-bar">${SHEET_TOOLS.map(([name]) => `<button type="button" data-ps-tool="${name}"></button>`).join("")}<button type="button" data-ps-delete>Delete</button></div>` +
+    // With more than one journal, which of them this passage is in is a choice.
+    `<div class="ps-bar">${SHEET_TOOLS.map(([name]) => `<button type="button" data-ps-tool="${name}"></button>`).join("")}${
+      store.journals().length > 1 ? `<button type="button" data-ps-tool="journals"></button>` : ""}<button type="button" data-ps-delete>Delete</button></div>` +
     `<div class="ps-panel hidden"></div><div class="ps-status"></div>`;
   els.passageSheet.classList.remove("hidden");
   updatePassageSheet();
@@ -2268,6 +2270,7 @@ function updatePassageSheet() {
     underline: u ? `<span class="ps-line ul-${u.id}">${escapeHtml(u.label)}</span>` : "Underline",
     tag: (p.tags || []).length ? `Tags (${p.tags.length})` : "Add tag",
     note: p.note ? "Edit note" : "Add note",
+    journals: store.journalIdsOf(p).length ? `Journals (${store.journalIdsOf(p).length})` : "Add to journal",
   };
   const set = (el, html) => { if (el.innerHTML !== html) el.innerHTML = html; };
   set(els.passageSheet.querySelector(".ps-quote"), quoteHtml(p, 140));
@@ -2292,6 +2295,7 @@ function setSheetTool(tool) {
   if (tool === "highlight" || tool === "underline") sheet.handle = mountStyleTool(panel, sheet.id, [tool]);
   else if (tool === "tag") sheet.handle = mountTagTool(panel, sheet.id);
   else if (tool === "note") sheet.handle = mountNoteTool(panel, sheet.id, () => { if (passageSheet === sheet) setSheetTool(null); });
+  else if (tool === "journals") sheet.handle = mountJournalsTool(panel, sheet.id);
   else if (tool === "file") {
     sheet.handle = mountFilingTool(panel, sheet.id, currentBook, () => {
       if (passageSheet !== sheet) return;
