@@ -111,7 +111,6 @@ export async function sheetAndSelection(page, sheet = "#passage-sheet") {
     return {
       selection: { top: frame.top + Math.min(...rects.map((r) => r.top)), bottom: frame.top + Math.max(...rects.map((r) => r.bottom)) },
       sheet: { top: el.top, bottom: el.bottom },
-      atTop: document.querySelector(sheet).classList.contains("at-top"),
     };
   }, sheet);
 }

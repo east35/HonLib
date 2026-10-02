@@ -131,9 +131,9 @@
 .reader[data-reader-theme="dark"] .dict-save:disabled{background:#000;color:#fff}
 .passage-sheet{position:absolute;z-index:46;left:50%;bottom:12px;transform:translateX(-50%);width:min(620px,calc(100vw - 24px));max-height:calc(100vh - 90px);overflow:auto;-webkit-overflow-scrolling:touch;background:var(--bg);color:var(--fg);border:2px solid var(--fg);padding:12px 14px;font-size:15px;line-height:1.4;display:flex;flex-direction:column;gap:10px}
 .passage-sheet.hidden{display:none!important}
-/* Either sheet moves to the top edge when the text it is about is at the foot
-   of the page; app.js sets how far down (below the visit strip, if any). */
-.passage-sheet.at-top,.dict-popover.at-top{bottom:auto}
+/* Either sheet sits beside the text it is about, where app.js puts it; the
+   foot of the screen is where it goes with nothing to sit beside. */
+.passage-sheet.placed,.dict-popover.placed{bottom:auto}
 .reader[data-reader-theme="dark"] .passage-sheet,.reader[data-reader-theme="dark"] .visit-bar,.reader[data-reader-theme="dark"] .passages-panel{--bg:#000;--fg:#fff}
 .ps-head{display:flex;align-items:flex-start;gap:12px}
 .ps-quote{flex:1;min-width:0;font-family:Literata,Georgia,serif;font-weight:500;font-size:15px;line-height:1.5;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
@@ -236,11 +236,17 @@ body.journal-open{overflow:hidden}
    fields. Only what the drawer's own rules don't already say is here. */
 .journal-settings .hint{margin:0}
 .journal-settings a.btn{text-decoration:none;text-align:center}
-.journal-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--fg)}
-.journal-list li{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 0;border-bottom:1px solid var(--fg)}
-.journal-list li>span{flex:1 1 140px;min-width:0;overflow-wrap:anywhere}
-.journal-list .btn,.journal-list select{padding:6px 10px;font-size:14px}
-.journal-add-source{display:flex;flex-direction:column;gap:8px}
+/* Sources and tags are lines of text, each with one control at its end. No
+   rules between them: the drawer's only lines are its fields' own boxes. */
+.journal-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.journal-list li{position:relative;display:flex;align-items:center;gap:10px;min-height:40px}
+.journal-list li>span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;font-size:15px}
+.journal-list .btn{flex:0 0 auto;min-width:54px;padding:6px 10px;font-size:14px}
+.journal-tag-more{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;background:transparent;color:inherit;border:0;cursor:pointer}
+.journal-tag-more svg{width:22px;height:22px;display:block}
+.journal-tag-more[aria-expanded="true"]{background:var(--fg);color:var(--bg)}
+/* A tag's menu, in the opposite colours to the drawer so it needs no outline. */
+.journal-list .passage-menu{--bg:var(--bg-inv);--fg:var(--fg-inv);border:0;min-width:200px}
 /* Search and filters: a band in the opposite colours to the page, as the
    cards are. Redefining the two theme colours makes everything inside follow. */
 .journal-tools,.passage-panel{--bg:var(--bg-inv);--fg:var(--fg-inv);background:var(--bg);color:var(--fg)}

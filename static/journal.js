@@ -594,42 +594,57 @@ function sourceChoices(type) {
   }
   return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).map((name) => [name, name]);
 }
+// What the journal could still take as a source: one list, grouped by kind,
+// each value "kind:key".
+function sourceOptionsHtml(sources) {
+  const taken = new Set(sources.map(store.sourceKey));
+  const group = (type, label) => {
+    const choices = sourceChoices(type).filter(([value]) => !taken.has(type === "book" ? `book:${value}` : `${type}:${store.nameKey(value)}`));
+    return choices.length ? `<optgroup label="${label}">${choices.map(([value, text]) => `<option value="${esc(`${type}:${value}`)}">${esc(text)}</option>`).join("")}</optgroup>` : "";
+  };
+  return group("book", "Books") + group("series", "Series") + group("author", "Authors");
+}
+// The tag whose menu is open in the settings drawer, if any.
+let tagMenu = null;
+// The drawer is kept as plain as the library's: a label and one control to a
+// field. A source is a line of text with its switch; adding one is a single
+// list; and what can be done to a tag is behind its own menu, as it is for a
+// passage.
 function renderSettings() {
   const j = viewJournal();
   if (!j) return;
   const sources = j.sources || [];
   const tags = store.tagsInJournal(j.id);
-  const type = els.settings.querySelector("[data-source-type]")?.value || "book";
+  if (!tags.some((t) => t.tag === tagMenu)) tagMenu = null;
+  const options = sourceOptionsHtml(sources);
+  const item = (attr, label) => `<button type="button" role="menuitem" class="passage-menu-item" ${attr}>${label}</button>`;
   els.settings.innerHTML = `
     <div class="drawer-field"><label for="journal-name">Name</label><input id="journal-name" type="text" value="${esc(j.name)}" maxlength="120" autocomplete="off"></div>
     <div class="drawer-field"><span class="drawer-label">Sources</span>
       ${sources.length ? `<ul class="journal-list">${sources.map((s) => `<li><span>${esc(sourceLabel(s))}</span>
         <button type="button" class="btn${s.enabled !== false ? " primary" : ""}" data-source-toggle="${esc(store.sourceKey(s))}" aria-pressed="${s.enabled !== false}">${s.enabled !== false ? "On" : "Off"}</button></li>`).join("")}</ul>`
         : `<p class="hint">No sources yet. Add a book, a series or an author and its highlights are collected here.</p>`}
-      <div class="journal-add-source"><select data-source-type aria-label="Kind of source"><option value="book">Book</option><option value="series">Series</option><option value="author">Author</option></select>
-        <select data-source-value aria-label="Source"></select><button type="button" class="btn" data-source-add>Add source</button></div>
+      ${options ? `<select data-source-add aria-label="Add a source"><option value="">Add a source…</option>${options}</select>` : ""}
       <div data-ask></div>
     </div>
     <div class="drawer-field"><span class="drawer-label">Tags in this journal</span>
       ${tags.length ? `<ul class="journal-list">${tags.map((t) => `<li data-tag="${esc(t.tag)}"><span>${esc(t.tag)} (${t.count})</span>
-        <button type="button" class="btn ghost" data-tag-rename>Rename</button>
-        <button type="button" class="btn ghost" data-tag-delete>Delete</button>
-        ${tags.length > 1 ? `<select data-tag-merge aria-label="Merge ${esc(t.tag)} into"><option value="">Merge into…</option>${tags.filter((o) => o.tag !== t.tag).map((o) => `<option value="${esc(o.tag)}">${esc(o.tag)}</option>`).join("")}</select>` : ""}</li>`).join("")}</ul>` : `<p class="hint">No tags used here yet.</p>`}
+        <button type="button" class="journal-tag-more" data-tag-menu aria-haspopup="menu" aria-expanded="${t.tag === tagMenu}" aria-label="Options for the tag ${esc(t.tag)}" title="Tag options">${ICONS.more}</button>
+        <div class="passage-menu${t.tag === tagMenu ? "" : " hidden"}" role="menu">${item("data-tag-rename", "Rename")}${
+          tags.filter((o) => o.tag !== t.tag).map((o) => item(`data-tag-merge="${esc(o.tag)}"`, `Merge into ${esc(o.tag)}`)).join("")}${item("data-tag-delete", "Delete")}</div></li>`).join("")}</ul>` : `<p class="hint">No tags used here yet.</p>`}
     </div>
     <div class="drawer-divider"></div>
     <a class="btn" href="/api/journal/journals/${encodeURIComponent(j.id)}/export.md" download>Export Markdown</a>
     <button type="button" class="btn" data-journal-delete>Delete journal</button>`;
-  const typeSel = els.settings.querySelector("[data-source-type]"), valueSel = els.settings.querySelector("[data-source-value]");
-  typeSel.value = type;
-  const fillValues = () => {
-    const taken = new Set(sources.map(store.sourceKey));
-    const choices = sourceChoices(typeSel.value).filter(([value]) =>
-      !taken.has(typeSel.value === "book" ? `book:${value}` : `${typeSel.value}:${store.nameKey(value)}`));
-    valueSel.innerHTML = choices.map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join("");
-    els.settings.querySelector("[data-source-add]").disabled = !choices.length;
-  };
-  typeSel.addEventListener("change", fillValues);
-  fillValues();
+}
+function setTagMenu(tag) {
+  tagMenu = tag;
+  for (const row of els.settings.querySelectorAll("[data-tag]")) {
+    const open = row.dataset.tag === tag;
+    row.querySelector(".passage-menu").classList.toggle("hidden", !open);
+    row.querySelector("[data-tag-menu]").setAttribute("aria-expanded", String(open));
+  }
+  if (tag) els.settings.querySelector('[data-tag-menu][aria-expanded="true"] + .passage-menu')?.scrollIntoView({ block: "nearest" });
 }
 // Journal settings open in the same drawer the library's view options use.
 function settingsOpen() { return !els.drawer.classList.contains("hidden"); }
@@ -637,6 +652,7 @@ function setSettingsOpen(open) {
   if (open === settingsOpen()) return;
   els.drawer.classList.toggle("hidden", !open);
   els.settingsToggle.setAttribute("aria-expanded", String(open));
+  tagMenu = null;
   if (open) renderSettings();
   else settingsAsk = null;
 }
@@ -665,13 +681,15 @@ function onSettingsClick(e) {
     else settingsEnable(source);
     return;
   }
-  if (e.target.closest("[data-source-add]")) {
-    const type = els.settings.querySelector("[data-source-type]").value, value = els.settings.querySelector("[data-source-value]").value;
-    if (!value) return;
-    settingsEnable(type === "book" ? { type, book_key: value, enabled: true } : { type, name: value, enabled: true });
+  const tag = e.target.closest("[data-tag]")?.dataset.tag;
+  // A tag's menu opens on its button and closes on any other tap in the drawer.
+  if (tag && e.target.closest("[data-tag-menu]")) { setTagMenu(tagMenu === tag ? null : tag); return; }
+  if (tagMenu) setTagMenu(null);
+  const merge = e.target.closest("[data-tag-merge]");
+  if (tag && merge) {
+    if (confirm(`Merge the tag "${tag}" into "${merge.dataset.tagMerge}"?`)) store.renameTag(j.id, tag, merge.dataset.tagMerge);
     return;
   }
-  const tag = e.target.closest("[data-tag]")?.dataset.tag;
   if (tag && e.target.closest("[data-tag-rename]")) {
     const next = prompt(`Rename the tag "${tag}"`, tag);
     if (next !== null && store.cleanTag(next) && store.cleanTag(next) !== tag) store.renameTag(j.id, tag, next);
@@ -696,11 +714,12 @@ function onSettingsChange(e) {
     else e.target.value = j.name;
     return;
   }
-  const merge = e.target.closest("[data-tag-merge]");
-  if (merge && merge.value) {
-    const from = merge.closest("[data-tag]").dataset.tag;
-    if (confirm(`Merge the tag "${from}" into "${merge.value}"?`)) store.renameTag(j.id, from, merge.value);
-    else merge.value = "";
+  // Choosing from "Add a source" adds it; the value is "kind:key", and a
+  // book's key has colons of its own.
+  const add = e.target.closest("[data-source-add]");
+  if (add && add.value) {
+    const type = add.value.slice(0, add.value.indexOf(":")), value = add.value.slice(type.length + 1);
+    settingsEnable(type === "book" ? { type, book_key: value, enabled: true } : { type, name: value, enabled: true });
   }
 }
 
@@ -817,7 +836,8 @@ export function initJournals(h) {
   document.addEventListener("keydown", (e) => {
     // Under an open book, Escape belongs to the reader.
     if (e.key !== "Escape" || !view || (document.body.classList.contains("reader-open") && !raised)) return;
-    if (settingsOpen()) setSettingsOpen(false);
+    if (tagMenu) setTagMenu(null);
+    else if (settingsOpen()) setSettingsOpen(false);
     else if (view.menu) setMenu(null);
     else if (view.tool) closeCardTool();
     else leaveJournal();

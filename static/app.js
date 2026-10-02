@@ -1709,7 +1709,7 @@ function wireReaderInput(doc) {
 }
 // The moment text is selected, and on every change as it is stretched: get out
 // of its way. The reading menu sits over the foot of the page, and a sheet
-// that is already up moves to the other edge before the selection reaches it.
+// that is already up keeps to the edge of the selection as it grows.
 function followSelection(doc) {
   const sel = doc.getSelection();
   if (!sel || !sel.rangeCount || sel.isCollapsed) return;
@@ -1743,13 +1743,15 @@ function dropSelection() {
   try { readerView?.deselect(); } catch {}
 }
 // ---- Where the sheets sit ----------------------------------------------
-// The definition and annotation sheets dock at the foot of the screen, under
-// the thumb. When that is where the text they are about is, they dock at the
-// top instead, so the words being marked are never the ones covered.
+// The definition and annotation sheets sit beside the text they are about:
+// just under it, or just over it where there is no room beneath. The eye and
+// the thumb are already there, and the words being marked are never the ones
+// covered. With nothing on the page to sit beside, they dock at the foot of
+// the screen.
 const SHEET_EDGE_PX = 12;
-// Room kept clear around the passage: the system's selection handles hang
-// below it.
-const SHEET_CLEAR_PX = 36;
+// The gap left under a passage, which the system's selection handles hang
+// into, and the smaller one left over it.
+const SHEET_UNDER_PX = 32, SHEET_OVER_PX = 10;
 // Top and bottom, in the reader's coordinates, of the part of some text that
 // is on the page showing. `rects` are in the coordinates of `doc`, whose frame
 // holds the whole chapter side by side, a page to a column.
@@ -1769,22 +1771,27 @@ function markSpan(id) {
   const mark = markRects.get(id);
   return mark ? spanInReader(mark.doc, mark.rects) : null;
 }
-// `top` forces the top edge: the tools that bring up a keyboard sit there,
+// `atTop` forces the top edge: the tools that bring up a keyboard sit there,
 // where the keyboard can't cover them.
-function placeReaderSheet(el, top = false) {
+function placeReaderSheet(el, atTop = false) {
   if (el.classList.contains("hidden")) return;
   const reader = els.reader.getBoundingClientRect();
-  // Below the visit strip when there is one.
-  const inset = els.viewer.getBoundingClientRect().top - reader.top + SHEET_EDGE_PX;
-  if (!top && sheetSpan) {
-    const height = el.offsetHeight;
-    // How much of the passage, and of the room around it, each edge would cover.
-    const covered = (from) => Math.max(0, Math.min(from + height, sheetSpan.bottom + SHEET_CLEAR_PX) - Math.max(from, sheetSpan.top - SHEET_CLEAR_PX));
-    const below = covered(reader.height - SHEET_EDGE_PX - height);
-    top = below > 0 && covered(inset) < below;
+  // The highest it may sit: below the visit strip when there is one.
+  const first = els.viewer.getBoundingClientRect().top - reader.top + SHEET_EDGE_PX;
+  let top = atTop ? first : null;
+  if (top == null && sheetSpan) {
+    const height = el.offsetHeight, last = reader.height - SHEET_EDGE_PX - height;
+    const under = sheetSpan.bottom + SHEET_UNDER_PX, over = sheetSpan.top - SHEET_OVER_PX - height;
+    if (under <= last) top = under;
+    else if (over >= first) top = over;
+    else {
+      // A passage that leaves no room either side: the edge that covers less of it.
+      const covered = (from) => Math.max(0, Math.min(from + height, sheetSpan.bottom) - Math.max(from, sheetSpan.top));
+      top = covered(first) < covered(last) ? first : last;
+    }
   }
-  el.classList.toggle("at-top", top);
-  el.style.top = top ? `${inset}px` : "";
+  el.classList.toggle("placed", top != null);
+  el.style.top = top == null ? "" : `${Math.round(top)}px`;
 }
 function placeReaderSheets() {
   placeReaderSheet(els.dictPopover);

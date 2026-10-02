@@ -166,9 +166,8 @@ saved the moment you make it. Tap a mark later and it shows you the passage and
 its note, with **View in journal** (the journal opens over the page, on that
 passage) and **Edit annotation** (the tools, to restyle, retag or delete it).
 
-The bar keeps clear of what you are marking: it sits at the foot of the screen
-unless that is where the selection is, and then it sits at the top. The page
-never turns under a selection. When a passage runs past the foot of the page,
+The bar sits beside what you are marking: just under the selection, or just
+over it where there is no room beneath. The page never turns under a selection. When a passage runs past the foot of the page,
 select to the end of the page and the bar offers **Continue on next page**; the
 page turns, and a tap on the passage's last word finishes it.
 

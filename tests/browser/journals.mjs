@@ -285,16 +285,46 @@ async function journalView(page, name, series) {
   await page.waitForFunction(() => document.querySelector("#journal-count").textContent === "4 Passages");
   await waitForJournal((s) => s.passages.filter((p) => p.journals.includes(series.id)).length === 4, "passages brought in");
 
+  // The drawer is a label and one control to a field: a source is a line with
+  // its switch, a tag a line with its menu, and one list adds a source.
+  assert.equal(await page.locator("#journal-settings select").count(), 1, `${name}: journal settings grew more than the one list`);
+  assert.equal(await page.locator("#journal-settings .journal-list li").evaluateAll((rows) => rows.filter((r) => {
+    const style = getComputedStyle(r);
+    return parseFloat(style.borderTopWidth) || parseFloat(style.borderBottomWidth);
+  }).length), 0, `${name}: the settings lists are ruled again`);
+  assert.equal(await page.locator("#journal-settings [data-tag] .passage-menu-item:visible").count(), 0, `${name}: tag actions are on show before their menu is opened`);
+  const tagMenu = async (tag, action) => {
+    await page.locator(`#journal-settings [data-tag="${tag}"] [data-tag-menu]`).click();
+    await page.locator(`#journal-settings [data-tag="${tag}"] ${action}`).click();
+  };
+  assert.deepEqual(
+    await page.locator('#journal-settings [data-tag="Orphans"] .passage-menu-item').allTextContents(),
+    ["Rename", "Merge into wayfaring", "Delete"],
+    `${name}: a tag's menu changed`,
+  );
+
   // Tags used in this journal can be renamed, merged and deleted.
   page.once("dialog", (dialog) => dialog.accept("Strays"));
-  await page.locator('#journal-settings [data-tag="Orphans"] [data-tag-rename]').click();
+  await tagMenu("Orphans", "[data-tag-rename]");
   await waitForJournal((s) => s.passages.some((p) => p.tags.includes("Strays")) && !s.passages.some((p) => p.tags.includes("Orphans")), "tag renamed");
   page.once("dialog", (dialog) => dialog.accept());
-  await page.locator('#journal-settings [data-tag="wayfaring"] [data-tag-merge]').selectOption("Strays");
+  await tagMenu("wayfaring", '[data-tag-merge="Strays"]');
   await waitForJournal((s) => s.passages.filter((p) => p.tags.includes("Strays")).length === 2 && !s.passages.some((p) => p.tags.includes("wayfaring")), "tags merged");
   page.once("dialog", (dialog) => dialog.accept());
-  await page.locator('#journal-settings [data-tag="Strays"] [data-tag-delete]').click();
+  await tagMenu("Strays", "[data-tag-delete]");
   await waitForJournal((s) => !s.passages.some((p) => p.tags.length), "tag deleted");
+
+  // Adding a source: one list of what the library still offers, by kind. The
+  // journal already has the only series, so there are just books and authors.
+  const addSource = page.locator("#journal-settings [data-source-add]");
+  assert.deepEqual(await addSource.locator("optgroup").evaluateAll((groups) => groups.map((g) => g.label)), ["Books", "Authors"], `${name}: the sources on offer changed`);
+  const split = await libraryBook(BOOKS.split);
+  await addSource.selectOption(`book:${split.key}`);
+  // That book's passages were made before it was a source here.
+  await page.locator('#journal-settings .journal-ask [data-answer="fresh"]').click();
+  const withBook = await waitForJournal((s) => s.journals.find((j) => j.id === series.id).sources.length === 2 && s, "the added source");
+  assert.deepEqual(withBook.journals.find((j) => j.id === series.id).sources[1], { type: "book", book_key: split.key, enabled: true }, `${name}: the chosen book was not added as a source`);
+  assert.equal(await page.locator("#journal-settings [data-source-toggle]").count(), 2);
 
   // Rename, then export.
   await page.locator("#journal-name").fill("Wayfarers");

@@ -166,21 +166,24 @@ async function tapsOnAndOffTheMark(page, name, passageId) {
   return passageId;
 }
 
-// A sheet docked at the foot of the screen would sit on text selected there,
-// so it docks at the top instead; text at the top leaves it where it was. The
-// reading menu, which lives at the foot too, gets out of the way.
-async function sheetsKeepClear(page, name) {
-  const clear = ({ selection, sheet }) => sheet.bottom <= selection.top || sheet.top >= selection.bottom;
+// The annotation bar sits beside the text it is about: just under it, or just
+// over it where there is no room beneath, and never on it. The reading menu,
+// which lives at the foot of the page, gets out of the way.
+async function sheetsSitBeside(page, name) {
+  const NEAR = 60;
   await page.evaluate(() => document.querySelector("#reader").classList.remove("chrome-hidden"));
+  // The last lines of the page: no room under them, so the bar goes over them.
   await selectPageEnd(page, 200);
   let seen = await sheetAndSelection(page);
-  assert.equal(seen.atTop, true, `${name}: the annotation bar stayed at the foot of the page, on the text being marked`);
-  assert.ok(clear(seen), `${name}: the annotation bar covers the selection (${JSON.stringify(seen)})`);
+  assert.ok(seen.sheet.bottom <= seen.selection.top, `${name}: the annotation bar covers a selection at the foot of the page (${JSON.stringify(seen)})`);
+  assert.ok(seen.selection.top - seen.sheet.bottom < NEAR, `${name}: the annotation bar is not beside the selection (${JSON.stringify(seen)})`);
   assert.equal(await page.locator("#reader").evaluate((el) => el.classList.contains("chrome-hidden")), true, `${name}: the reading menu stayed up over a selection`);
-  // It follows the passage into the sheet that edits it, and when tapped later.
+  // It stays there as the sheet that edits the passage, and when tapped later.
+  const marked = seen.selection;
   await page.locator('[data-ps-new="highlight"]').click();
   await page.locator('#passage-sheet [data-ps-tool="highlight"][aria-pressed="true"]').waitFor();
-  assert.equal(await page.locator("#passage-sheet").evaluate((el) => el.classList.contains("at-top")), true, `${name}: the editing sheet dropped back onto the passage it edits`);
+  let box = await page.locator("#passage-sheet").boundingBox();
+  assert.ok(box.y + box.height <= marked.top && marked.top - (box.y + box.height) < NEAR, `${name}: the editing sheet left the passage it edits`);
   const made = (await waitForJournal((s) => s.passages.length === 2 && s, "the passage at the foot of the page")).passages.find((p) => p.text !== "Filler text that exists only to make this section long enough to span sev");
   await page.locator("[data-ps-close]").click();
   const foot = await page.evaluate(() => {
@@ -194,20 +197,29 @@ async function sheetsKeepClear(page, name) {
   });
   await page.mouse.click(foot.x, foot.y);
   await page.locator("#passage-sheet [data-ps-edit]").waitFor();
-  const box = await page.locator("#passage-sheet").boundingBox();
-  assert.ok(box.y + box.height < foot.y, `${name}: a mark at the foot of the page is covered by its own sheet`);
+  box = await page.locator("#passage-sheet").boundingBox();
+  assert.ok(box.y + box.height <= marked.top && marked.top - (box.y + box.height) < NEAR, `${name}: a tapped mark's sheet is not beside it`);
   await page.locator("#passage-sheet [data-ps-edit]").click();
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator("[data-ps-delete]").click();
   await waitForJournal((s) => !s.passages.some((p) => p.id === made.id), "the foot-of-page passage deleted");
 
-  // At the top of the page the foot is the right place for it.
+  // Near the top of the page there is room beneath, and that is where it goes.
   await selectText(page, "#one-p0", 17, 90);
   seen = await sheetAndSelection(page);
-  assert.equal(seen.atTop, false, `${name}: the annotation bar left the foot of the page for no reason`);
-  assert.ok(clear(seen), `${name}: the annotation bar covers a selection at the top of the page`);
+  assert.ok(seen.sheet.top >= seen.selection.bottom, `${name}: the annotation bar covers a selection at the top of the page (${JSON.stringify(seen)})`);
+  assert.ok(seen.sheet.top - seen.selection.bottom < NEAR, `${name}: the annotation bar is not just under the selection (${JSON.stringify(seen)})`);
+  // The definition sheet follows the same rule. (The dictionary is a
+  // third-party service; any answer will do.)
+  const lookup = (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ notFound: true }) });
+  await page.route("**/api/dictionary/*", lookup);
+  await selectText(page, "#one-p1", 17, 23);
+  await page.locator("#dict-popover").waitFor({ state: "visible" });
+  seen = await sheetAndSelection(page, "#dict-popover");
+  assert.ok(seen.sheet.top >= seen.selection.bottom && seen.sheet.top - seen.selection.bottom < NEAR, `${name}: the definition is not just under its word (${JSON.stringify(seen)})`);
   await page.evaluate(() => document.querySelector("foliate-view").deselect());
-  await page.locator("#passage-sheet").waitFor({ state: "hidden" });
+  await page.locator("#dict-popover").waitFor({ state: "hidden" });
+  await page.unroute("**/api/dictionary/*", lookup);
 }
 
 // The page does not turn under a selection. A passage that runs past the foot
@@ -447,7 +459,7 @@ async function runEngine(name, engine) {
     await tagAndNote(page, name);
     await marksShowTheirText(page, name);
     await tapsOnAndOffTheMark(page, name, passageId);
-    await sheetsKeepClear(page, name);
+    await sheetsSitBeside(page, name);
     await passageAcrossPages(page, name);
     const wordId = await saveFromDefinition(page, name);
     await survivesReloadAndDelete(page, name, passageId, wordId);
