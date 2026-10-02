@@ -325,6 +325,21 @@ async function passageAcrossPages(page, name) {
     selection.setBaseAndExtent(range.startContainer, range.startOffset, range.endContainer, Math.min(range.endOffset + 12, range.endContainer.length));
   });
   assert.equal(await movedFrom(page, start, 1500), false, `${name}: selecting past the foot of the page turned it`);
+  // Nor is the reader left between two pages. The next page's text is the
+  // next thing in the chapter, so a selection dragged past the last line lands
+  // in it and the browser scrolls to show it. The page is put back whenever it
+  // is moved under a selection, and the passage stops at the foot of the page.
+  const strayed = await page.evaluate(async () => {
+    const view = document.querySelector("foliate-view"), renderer = view.renderer;
+    const visible = view.lastLocation.range;
+    const onPage = visible.endContainer.data.slice(visible.endOffset - 60, visible.endOffset).replace(/\s+/g, " ").trim();
+    const at = renderer.start;
+    renderer.scrollBy(150, 0);
+    const nudged = Math.round(renderer.start - at);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return { passage: document.querySelector("#passage-sheet .ps-quote").textContent === onPage, nudged, drift: Math.round(renderer.start - at) };
+  });
+  assert.deepEqual(strayed, { passage: true, nudged: 150, drift: 0 }, `${name}: a selection past the foot of the page left the reader between two pages`);
   await page.locator("#passage-sheet [data-ps-continue]").waitFor();
   const head = await page.evaluate(() => document.querySelector("foliate-view").renderer.getContents()[0].doc.getSelection().toString());
 
@@ -365,7 +380,11 @@ async function passageAcrossPages(page, name) {
   await page.locator("#passage-sheet [data-ps-close]").click();
   assert.equal(await sheetOpen(page), false);
   assert.equal(await page.evaluate(() => document.querySelector("foliate-view").renderer.getContents()[0].doc.getSelection().isCollapsed), true, `${name}: cancelling left the passage selected on the page before`);
-  await page.evaluate(async () => { await document.querySelector("foliate-view").goTo(0); });
+  // Back to the first page, where the tests that follow select their text.
+  // (The renderer ignores navigation for a moment after a page turn.)
+  await settled(page);
+  await page.evaluate(async () => { await document.querySelector("foliate-view").renderer.goTo({ index: 0, anchor: 0 }); });
+  await page.waitForFunction(() => document.querySelector("foliate-view").renderer.page === 1);
   await settled(page);
 }
 

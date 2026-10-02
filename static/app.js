@@ -62,6 +62,9 @@ let holdTimer = null;
 // The page whose own selecting is switched off while the reader holds a
 // passage on it (see showHeld).
 let lockedDoc = null;
+// Where the chapter strip was scrolled to when the page last came to rest
+// (see keepThePage). Null while the reader is on its way to another page.
+let settledStart = null;
 // The annotation sheet: { mode: "new" } while it offers to mark a fresh
 // selection; { mode: "view", id } for a passage made earlier, which is shown
 // with the way to its journal rather than opened for editing; { mode: "edit",
@@ -888,7 +891,7 @@ async function openReader(book, nextVisit = null) {
   // A visit made from inside the reader replaces the book that is open.
   if (readerView) { try { readerView.close(); } catch {} readerView.remove(); readerView = null; }
   closeReaderSheets();
-  pendingSelection = null; heldTint = null; lockedDoc = null; carrying = false; pressed = null; fingerDown = false; clearTimeout(holdTimer); sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear();
+  pendingSelection = null; heldTint = null; lockedDoc = null; settledStart = null; carrying = false; pressed = null; fingerDown = false; clearTimeout(holdTimer); sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear();
   els.reader.classList.remove("hidden"); document.body.classList.add("reader-open");
   // Re-pull progress from the server before restoring position. The in-memory
   // `progress` map can be stale if this tab has been open while another device
@@ -938,6 +941,7 @@ async function openReader(book, nextVisit = null) {
       if (pendingSelection) dropSelection();
     }
     noteReaderRelocate(loc);
+    try { settledStart = readerView.renderer.start; } catch { settledStart = null; }
     currentLocation = {
       fraction: loc.fraction || 0,
       tocHref: loc.tocItem?.href || null,
@@ -986,6 +990,7 @@ async function openReader(book, nextVisit = null) {
     return;
   }
   ownPageTurns(readerView.renderer);
+  readerView.renderer.addEventListener("scroll", keepThePage);
   // An older shell can serve a library listing that predates book keys. The
   // book itself says what its key is: the server derives it from the same
   // identifier.
@@ -1131,7 +1136,7 @@ function openTocView(tab = "contents") {
   else els.tocList.scrollTop = 0;
 }
 function closeTocView() { els.tocView.classList.add("hidden"); setPassagesPolling(false); }
-function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; visit = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeReaderSheets(); pendingSelection = null; heldTint = null; lockedDoc = null; carrying = false; pressed = null; fingerDown = false; clearTimeout(holdTimer); sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear(); updateVisitBar(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
+function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; visit = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeReaderSheets(); pendingSelection = null; heldTint = null; lockedDoc = null; settledStart = null; carrying = false; pressed = null; fingerDown = false; clearTimeout(holdTimer); sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear(); updateVisitBar(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
 function saveReaderSettings() { localStorage.setItem("ebook-library.reader", JSON.stringify(readerSettings)); }
 // Measure a font's average glyph advance once (it never changes for a face), so
 // we can solve for the font size that yields a given characters-per-line measure.
@@ -1768,12 +1773,44 @@ function wireReaderInput(doc) {
 function followSelection(doc) {
   const sel = doc.getSelection();
   if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+  keepThePage();
   if (!els.reader.classList.contains("chrome-hidden")) hideReaderChrome();
   if (!readerSheetOpen() || (passageSheet && passageSheet.mode !== "new")) return;
   const span = spanInReader(doc, sel.getRangeAt(0).getClientRects());
   if (!span) return;
   sheetSpan = span;
   placeReaderSheets();
+}
+// ---- Keeping a selection on its page -------------------------------------
+// A chapter is laid out as one long strip, a page to a column, and the next
+// page's text is the next thing in it. A selection dragged past the last line
+// of the page lands in that text, and the browser then scrolls the strip to
+// show where the selection has got to: the reader is left between two pages
+// with half of the next one selected. Two things stop it. While text is
+// selected the strip is put back where it was whenever it is moved, and what
+// the reader takes from the page's selection is only the part of it on this
+// page (a passage that runs on is carried over by asking; see continuePassage).
+// The page's own selection is left as the system made it: rewriting it under a
+// finger leaves Android's selection bar on the screen after the selection has
+// gone.
+function onThePage(doc, range) {
+  try {
+    const visible = readerView.lastLocation?.range;
+    if (!visible || visible.startContainer.ownerDocument !== doc) return range;
+    const kept = range.cloneRange();
+    if (range.compareBoundaryPoints(Range.START_TO_START, visible) < 0) kept.setStart(visible.startContainer, visible.startOffset);
+    if (range.compareBoundaryPoints(Range.END_TO_END, visible) > 0) kept.setEnd(visible.endContainer, visible.endOffset);
+    return kept.collapsed ? null : kept;
+  } catch { return range; }
+}
+function keepThePage() {
+  if (settledStart == null || !readerView || !bookSelecting()) return;
+  try {
+    const drift = readerView.renderer.start - settledStart;
+    if (Math.abs(drift) < 1) return;
+    const back = readerView.book?.dir === "rtl" ? drift : -drift;
+    readerView.renderer.scrollBy(back, back);
+  } catch {}
 }
 function cleanText(text) { return String(text).replace(/\s+/g, " ").trim(); }
 function sameRange(a, b) {
@@ -1797,10 +1834,12 @@ function evaluateSelection(doc) {
   }
   const index = sectionIndexOf(doc);
   if (index == null) return;
-  const range = sel.getRangeAt(0).cloneRange();
+  let range = sel.getRangeAt(0).cloneRange();
   // A passage carried over from the page before runs on to the end of
-  // whatever has been selected on this one.
+  // whatever has been selected on this one. Anything else stays on its page.
   if (carrying && pendingSelection?.doc === doc) range.setStart(pendingSelection.range.startContainer, pendingSelection.range.startOffset);
+  else range = onThePage(doc, range);
+  if (!range) return;
   // Unless it is the selection already in hand (one the reader set itself).
   if (!(pendingSelection?.doc === doc && sameRange(range, pendingSelection.range))) takeSelection(doc, index, range);
   holdWhenFree();
@@ -2827,6 +2866,8 @@ function ownPageTurns(renderer) {
   }
 }
 function turnPage(go) {
+  // On its way somewhere: not to be pulled back (see keepThePage).
+  settledStart = null;
   turningPage = true;
   try { return go(); } finally { turningPage = false; }
 }
