@@ -692,6 +692,17 @@ def get_progress():
     return jsonify(progress.load_progress())
 
 
+# One book's place as the server holds it. The Android shell answers
+# /api/progress itself, merged with writes it has queued, and so can show a
+# device its own place in front of a newer one saved elsewhere. Any other path
+# goes straight through the shell to here, which is how the reader finds out
+# whether another device has read further.
+@app.route("/api/progress/<book_id>", methods=["GET"])
+def get_one_progress(book_id):
+    entry = progress.get_book_progress(book_id)
+    return jsonify({"ok": True, "book_id": book_id, "entry": entry or None})
+
+
 @app.route("/api/progress", methods=["POST"])
 def post_progress():
     data = request.get_json(force=True) or {}

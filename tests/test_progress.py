@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import app
 import progress
 
 
@@ -51,6 +52,18 @@ class ReadingProgressTests(unittest.TestCase):
         self.assertTrue(progress._is_older(
             "2026-07-22T12:00:00Z", "2026-07-22T12:00:00.123456Z"
         ))
+
+    def test_api_returns_one_books_place_as_the_server_holds_it(self):
+        saved = progress.update_book_progress(
+            "book-1", cfi="epubcfi(/page-7)", percent=0.4
+        )["entry"]
+        client = app.app.test_client()
+
+        found = client.get("/api/progress/book-1").get_json()
+        missing = client.get("/api/progress/book-2").get_json()
+
+        self.assertEqual(found["entry"], saved)
+        self.assertIsNone(missing["entry"])
 
 
 if __name__ == "__main__":

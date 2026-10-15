@@ -15,6 +15,9 @@
 //   2. The frozen token kept being forwarded to the real server, whose staleness
 //      guard rejected every later write as a conflict that never happened.
 //
+// The reader now fetches the token from the server after such a write, through
+// the per-book progress path the shell passes straight on.
+//
 // Neither reproduces against the real server, which always returns `entry`, so
 // this test stands in the proxy's response shape at the network layer.
 import assert from "node:assert/strict";
@@ -38,14 +41,22 @@ async function bookId() {
 }
 
 // Stand in for EbookRouter's progress handlers: POST queues and reports no
-// entry, GET returns the queued row with the proxy's own timestamp on it.
+// entry, GET returns the queued row with the proxy's own timestamp on it. The
+// per-book path passes through to cloud, which holds what was forwarded.
 async function installProxy(context, id) {
   const posts = [];
   let stored = { cfi: null, percent: 0, last_opened: SEEDED_TOKEN };
   await context.route(
-    (url) => url.pathname === "/api/progress",
+    (url) => url.pathname === "/api/progress" || url.pathname === `/api/progress/${id}`,
     async (route) => {
       const request = route.request();
+      if (new URL(request.url()).pathname !== "/api/progress") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, book_id: id, entry: stored }),
+        });
+      }
       if (request.method() !== "POST") {
         return route.fulfill({
           status: 200,
@@ -84,19 +95,21 @@ async function runEngine(name, engine) {
     const page = await context.newPage();
     await openBook(page, BOOK);
 
-    // Land the first write, then check the token was abandoned. Left in place it
-    // would be forwarded forever and the real server would reject every write.
+    // Land the first write, then check the token moved on to the one cloud
+    // gave it. Left in place it would be forwarded forever and the real server
+    // would reject every write.
     await turnPage(page);
     await waitForWrites(posts, 1);
     assert.equal(posts[0].base, SEEDED_TOKEN, `${name}: first write should still carry the opening token`);
     const seen = posts.length;
     await turnPage(page);
     await waitForWrites(posts, seen + 1);
-    assert.equal(
+    assert.notEqual(
       posts[seen].base,
-      null,
-      `${name}: kept sending a token the backend never refreshes (${posts[seen].base})`,
+      SEEDED_TOKEN,
+      `${name}: kept sending a token the backend never refreshes`,
     );
+    assert.ok(posts[seen].base, `${name}: dropped the token, so a queued write could overwrite another device`);
 
     // Now the trap itself: turn a page, then hand the window focus back while
     // the write is still in flight, so the proxy still holds the previous page.

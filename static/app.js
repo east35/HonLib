@@ -135,14 +135,13 @@ function noteOwnWrite(bookId, cfi) {
 function isOwnWrite(bookId, cfi) {
   return !!cfi && !!ownWrites.get(bookId)?.has(cfi);
 }
-// Books this device has read in since the server last confirmed its place: a
-// write the shell queued offline, or one that never arrived. A newer place from
-// another device is then a real conflict, so ask about it rather than silently
-// jump either way.
-const unsyncedReading = new Set();
 // The newer place from another device the reader is being asked about:
 // { bookId, entry }.
 let resumePrompt = null;
+// How often an open book asks the server whether another device has read
+// further. Waking an e-reader fires nothing the page can rely on, but timers
+// that were due while it slept run as soon as it wakes.
+const LATEST_PROGRESS_EVERY_MS = 30000;
 // Relocate events can arrive faster than their requests complete. Event
 // listeners are not awaited by the browser, so serialize saves to prevent an
 // older page request from reaching the server after a newer page request.
@@ -340,29 +339,25 @@ async function saveBookProgress(book, cfi, percent) {
         if (entry) {
           progress.books[book.id] = entry;
           progressBases.set(book.id, entry.last_opened || null);
-          unsyncedReading.delete(book.id);
         } else if (data && data.queued && data.synced === false) {
-          // The shell is offline and queued the write to send later, as it
-          // was: with this baseline. Keep it, so that when the queue reaches
-          // the server a newer place from another device is caught as a
-          // conflict instead of being overwritten by this one.
-          unsyncedReading.add(book.id);
+          // The shell kept the write to send later, as it was: with this
+          // baseline. Keep it, so that when the queue reaches the server a
+          // newer place from another device is refused rather than
+          // overwritten. The shell answers this way too when the server
+          // refused the write, so see whether that is why.
+          if (currentBook?.id === book.id) checkLatestProgress();
         } else {
-          // Accepting a write without returning the stored entry means this
-          // backend isn't running the conflict protocol — the Android shell's
-          // offline proxy queues the write and answers {ok, queued, synced}.
-          // Our token can then never be refreshed, and a token that cannot be
-          // refreshed is worse than none: it goes stale, and the real server
-          // starts rejecting every later write as a conflict that never
-          // happened. Drop it and let last-writer-wins do its job.
-          progressBases.set(book.id, null);
+          // The Android shell sent the write on but answers {ok, queued,
+          // synced} without the token the server gave it. Fetch that token,
+          // so the next write is based on this one. Left stale, the server
+          // refuses every later write; dropped, a write the shell queues
+          // offline later overwrites whatever another device saved meanwhile.
+          const latest = await fetchServerProgress(book.id);
+          if (latest?.cfi === cfi) progressBases.set(book.id, latest.last_opened || null);
+          else if (latest && currentBook?.id === book.id) checkLatestProgress();
         }
       }
-    } catch {
-      // Never reached anything. The server still has the place this device
-      // last confirmed, not the one on screen.
-      unsyncedReading.add(book.id);
-    }
+    } catch {}
   };
   progressSaveChain = progressSaveChain.then(save, save);
   return progressSaveChain;
@@ -384,53 +379,60 @@ async function resyncReaderTo(entry) {
 }
 
 // When this tab regains focus, another device may have moved ahead while it sat
-// idle showing an old position. Pull the latest and catch up before the user can
-// trigger a relocate that would save the stale spot.
+// idle showing an old position. Pull the latest bookmarks, and ask about a
+// newer place before the user can trigger a relocate that would save this one.
 async function refreshOpenReaderProgress() {
   // Coming back to the app is also when another device's highlights are most
   // likely to be waiting.
   store.sync();
   // A visit is deliberately somewhere other than the saved place.
   if (!currentBook || !readerView || !readerReady || visit) return;
-  let entry, data;
-  try { data = await api("/api/progress"); entry = data && data.books ? data.books[currentBook.id] : null; }
-  catch { return; }
-  progress.bookmarks ||= {};
-  progress.bookmarks[currentBook.id] = data.bookmarks?.[currentBook.id] || [];
-  if (!progress.bookmarks[currentBook.id].length) delete progress.bookmarks[currentBook.id];
-  updateBookmarkButton();
-  if (tocTab === "bookmarks") renderBookmarks();
-  // The shell holds a write of ours the server hasn't taken, and the server has
-  // moved on since that write's baseline: it hands back both places.
-  if (offerConflict(currentBook.id, data.conflicts)) return;
-  if (!entry || !entry.last_opened) return;
-  const base = progressBases.get(currentBook.id);
-  // A position this session wrote is not another device catching us up, however
-  // new its timestamp looks — it is our own page turn coming back around.
-  if (base && isNewerToken(entry.last_opened, base) && !isOwnWrite(currentBook.id, entry.cfi)) {
-    // Read here since the server last heard from us: both places are real.
-    if (unsyncedReading.has(currentBook.id) || resumePrompt) { offerResume(entry); return; }
-    // Nothing read here since: just catch up.
-    progress.books[currentBook.id] = entry;
-    progressBases.set(currentBook.id, entry.last_opened);
-    await resyncReaderTo(entry);
+  const bookId = currentBook.id;
+  let data;
+  try { data = await api("/api/progress"); } catch { data = null; }
+  if (data && currentBook?.id === bookId) {
+    progress.bookmarks ||= {};
+    progress.bookmarks[bookId] = data.bookmarks?.[bookId] || [];
+    if (!progress.bookmarks[bookId].length) delete progress.bookmarks[bookId];
+    updateBookmarkButton();
+    if (tocTab === "bookmarks") renderBookmarks();
   }
+  await checkLatestProgress();
 }
 
-// Ask about a conflict the shell reports for this book, if there is one.
-// Returns whether it was taken care of.
-function offerConflict(bookId, conflicts) {
-  const remote = conflicts?.[bookId]?.remote;
-  if (!remote || !remote.cfi || !remote.last_opened) return false;
-  // The server's place is a page we wrote ourselves, landed after the queued
-  // write's baseline was taken. Nothing to ask: move the baseline up so the
-  // next page turn goes through.
-  if (isOwnWrite(bookId, remote.cfi)) {
-    progressBases.set(bookId, remote.last_opened);
-    return true;
+// Ask the server where the open book is, and if another device has read
+// further than the place this one last synced, ask which to keep. It has to
+// be the server itself: the Android shell answers /api/progress from its own
+// queue, where a page this device turned offline stands in front of anything
+// newer from elsewhere. Any other path goes through the shell untouched.
+let latestProgressCheck = null;
+function checkLatestProgress() {
+  // One at a time: offline, each try can wait a while on the shell.
+  latestProgressCheck ||= askServerForLatest().finally(() => { latestProgressCheck = null; });
+  return latestProgressCheck;
+}
+async function fetchServerProgress(bookId) {
+  try {
+    const res = await fetch(`/api/progress/${encodeURIComponent(bookId)}`);
+    return res.ok ? (await res.json())?.entry || null : null;
+  } catch { return null; }
+}
+async function askServerForLatest() {
+  if (!currentBook || !readerView || !readerReady || visit) return;
+  const bookId = currentBook.id;
+  const entry = await fetchServerProgress(bookId);
+  if (currentBook?.id !== bookId || visit || !entry?.cfi || !entry.last_opened) return;
+  const base = progressBases.get(bookId);
+  // This device's own place: nothing to ask, and the server's token for it is
+  // the one to carry on from.
+  if (entry.cfi === currentLocation.cfi || isOwnWrite(bookId, entry.cfi)) {
+    if (!base || isNewerToken(entry.last_opened, base)) progressBases.set(bookId, entry.last_opened);
+    if (resumePrompt?.bookId === bookId) closeResumePrompt();
+    return;
   }
-  offerResume(remote);
-  return true;
+  // Nothing saved since this device last synced.
+  if (base && !isNewerToken(entry.last_opened, base)) return;
+  offerResume(entry);
 }
 
 // "Latest progress <where> at <when>": where another device has got to, with
@@ -471,7 +473,6 @@ async function acceptResume() {
   const { entry } = prompt;
   progress.books[prompt.bookId] = entry;
   progressBases.set(prompt.bookId, entry.last_opened || null);
-  unsyncedReading.delete(prompt.bookId);
   await resyncReaderTo(entry);
   await saveBookProgress(currentBook, entry.cfi, Number(entry.percent) || 0);
 }
@@ -1002,7 +1003,6 @@ async function openReader(book, nextVisit = null) {
   // advanced; restoring (and then re-saving) that stale spot is what clobbers
   // newer cross-device progress.
   closeResumePrompt();
-  unsyncedReading.delete(book.id);
   try {
     await loadProgress();
     const fresh = progress.books[book.id];
@@ -1012,12 +1012,13 @@ async function openReader(book, nextVisit = null) {
     // baseline, or the queue would forget what it was based on and overwrite
     // whatever another device saved since.
     const queued = !!fresh && Object.prototype.hasOwnProperty.call(fresh, "base");
-    if (queued) unsyncedReading.add(book.id);
     progressBases.set(book.id, fresh ? (queued ? fresh.base : fresh.last_opened) || null : null);
   } catch { progressBases.set(book.id, null); }
   // Last session's writes are someone else's history now: if another device has
   // since moved to a position this one once wrote, that is a real catch-up.
+  // The place this device opens at is the exception: it is not news.
   ownWrites.delete(book.id);
+  noteOwnWrite(book.id, book.cfi);
   currentBook = book;
   updateVisitBar();
   els.reader.classList.remove("chrome-hidden");
@@ -1144,8 +1145,8 @@ async function openReader(book, nextVisit = null) {
     if (start) { try { await readerView.goTo(start); } catch {} }
     applyReaderTheme();
     readerReady = true;
-    // Opened at this device's place while another device's newer one waits.
-    if (!visit) offerConflict(book.id, progress.conflicts);
+    // Opened at this device's place while another device's may be newer.
+    checkLatestProgress();
   }));
 }
 function renderToc(items, depth = 0) {
@@ -2913,8 +2914,25 @@ els.readerClose.addEventListener("click", leaveReader);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshOpenReaderProgress(); });
 window.addEventListener("focus", refreshOpenReaderProgress);
 // Back online is when a place another device saved meanwhile becomes visible.
-// The shell fires this too when its connection comes back.
 window.addEventListener("online", refreshOpenReaderProgress);
+// The Android shell reports its connection by setting __readerShellOffline
+// (from its __readerShellSetOffline). Watch it come back on, leaving the
+// shell's own handling alone.
+(() => {
+  let offline = !!window.__readerShellOffline;
+  try {
+    Object.defineProperty(window, "__readerShellOffline", {
+      configurable: true,
+      get: () => offline,
+      set: (value) => {
+        const reconnected = offline && !value;
+        offline = !!value;
+        if (reconnected) refreshOpenReaderProgress();
+      },
+    });
+  } catch {}
+})();
+setInterval(() => { if (!document.hidden) checkLatestProgress(); }, LATEST_PROGRESS_EVERY_MS);
 els.resumeGo.addEventListener("click", acceptResume);
 els.resumeStay.addEventListener("click", declineResume);
 els.tocToggle.addEventListener("click", openTocView);
