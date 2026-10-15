@@ -203,6 +203,13 @@ button.tag-chip{cursor:pointer}
 .visit-bar.hidden{display:none!important}
 .visit-label{flex:1 1 140px;min-width:0;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .visit-bar .btn{padding:8px 12px;font-size:14px}
+/* Another device's newer place: floated over the top of the page rather than
+   pushing it down like a visit. Re-laying the page out is slow on e-ink, and
+   foliate ignores a jump asked for while it is still laying out. The label
+   wraps rather than cut off the time. */
+.resume-bar{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:min(620px,calc(100vw - 24px));z-index:47;border:2px solid var(--fg)}
+.resume-bar .visit-label{white-space:normal}
+@media (max-width:520px){.resume-bar .visit-label{flex-basis:100%}}
 .visit-unavailable{max-width:420px;padding:24px;text-align:center}
 .visit-unavailable p{margin:0 0 10px}
 .visit-unavailable-note{font-weight:600}

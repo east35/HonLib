@@ -15,7 +15,7 @@ const els = {
   appUpdate: $("#app-update"), appUpdateMessage: $("#app-update-message"), appUpdateApply: $("#app-update-apply"), appUpdateDismiss: $("#app-update-dismiss"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
   bookActionsModal: $("#book-actions-modal"), bookActionsTitle: $("#book-actions-title"), bookActionReset: $("#book-action-reset"), bookActionDelete: $("#book-action-delete"),
-  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), passageSheet: $("#passage-sheet"), tocPassagesTab: $("#toc-passages-tab"), passagesPanel: $("#passages-panel"), passagesList: $("#passages-list"), passagesScopeBook: $("#passages-scope-book"), passagesScopeJournal: $("#passages-scope-journal"), passagesSearch: $("#passages-search"), passagesTag: $("#passages-tag"), visitBar: $("#visit-bar"), visitLabel: $("#visit-label"), visitBack: $("#visit-back"), visitPlace: $("#visit-place"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
+  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), passageSheet: $("#passage-sheet"), tocPassagesTab: $("#toc-passages-tab"), passagesPanel: $("#passages-panel"), passagesList: $("#passages-list"), passagesScopeBook: $("#passages-scope-book"), passagesScopeJournal: $("#passages-scope-journal"), passagesSearch: $("#passages-search"), passagesTag: $("#passages-tag"), visitBar: $("#visit-bar"), visitLabel: $("#visit-label"), visitBack: $("#visit-back"), visitPlace: $("#visit-place"), resumeBar: $("#resume-bar"), resumeLabel: $("#resume-label"), resumeGo: $("#resume-go"), resumeStay: $("#resume-stay"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
 };
 
 let currentJob = null;
@@ -135,6 +135,14 @@ function noteOwnWrite(bookId, cfi) {
 function isOwnWrite(bookId, cfi) {
   return !!cfi && !!ownWrites.get(bookId)?.has(cfi);
 }
+// Books this device has read in since the server last confirmed its place: a
+// write the shell queued offline, or one that never arrived. A newer place from
+// another device is then a real conflict, so ask about it rather than silently
+// jump either way.
+const unsyncedReading = new Set();
+// The newer place from another device the reader is being asked about:
+// { bookId, entry }.
+let resumePrompt = null;
 // Relocate events can arrive faster than their requests complete. Event
 // listeners are not awaited by the browser, so serialize saves to prevent an
 // older page request from reaching the server after a newer page request.
@@ -297,30 +305,48 @@ async function saveBookProgress(book, cfi, percent) {
   // Record before sending: a write still in flight is exactly the one a backend
   // that is a step behind will echo back at us.
   noteOwnWrite(book.id, cfi);
+  const post = () => fetch("/api/progress", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ book_id: book.id, cfi, percent, base: progressBases.get(book.id) || null }),
+  });
   const save = async () => {
     try {
-      const res = await fetch("/api/progress", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ book_id: book.id, cfi, percent, base: progressBases.get(book.id) || null }),
-      });
+      let res = await post();
       if (res.status === 401) { window.location.href = "/login"; return; }
-      const data = await res.json().catch(() => null);
-      const entry = data && data.entry;
+      let data = await res.json().catch(() => null);
+      let entry = data && data.entry;
+      // Rejected only because a write of ours that the shell queued has since
+      // landed and moved the token on. Nobody else is ahead: catch the token up
+      // and send this page again.
+      if (res.status === 409 && entry && isOwnWrite(book.id, entry.cfi)) {
+        progressBases.set(book.id, entry.last_opened || null);
+        res = await post();
+        data = await res.json().catch(() => null);
+        entry = data && data.entry;
+      }
       if (res.status === 409) {
-        // Another device advanced past our baseline. Adopt its position instead
-        // of overwriting it, and jump an open reader there.
-        if (entry) {
-          progress.books[book.id] = entry;
-          progressBases.set(book.id, entry.last_opened || null);
-          if (currentBook?.id === book.id && !isOwnWrite(book.id, entry.cfi)) await resyncReaderTo(entry);
-        }
+        if (!entry || isOwnWrite(book.id, entry.cfi)) return;
+        // Another device advanced past our baseline. With the book open, ask
+        // which place to keep — and leave the baseline alone until then, so
+        // the conflict stays on record rather than being settled by a page turn.
+        if (currentBook?.id === book.id && !visit) { offerResume(entry); return; }
+        // Nobody to ask: the newer place stands.
+        progress.books[book.id] = entry;
+        progressBases.set(book.id, entry.last_opened || null);
         return;
       }
       if (res.ok) {
         if (entry) {
           progress.books[book.id] = entry;
           progressBases.set(book.id, entry.last_opened || null);
+          unsyncedReading.delete(book.id);
+        } else if (data && data.queued && data.synced === false) {
+          // The shell is offline and queued the write to send later, as it
+          // was: with this baseline. Keep it, so that when the queue reaches
+          // the server a newer place from another device is caught as a
+          // conflict instead of being overwritten by this one.
+          unsyncedReading.add(book.id);
         } else {
           // Accepting a write without returning the stored entry means this
           // backend isn't running the conflict protocol — the Android shell's
@@ -332,7 +358,11 @@ async function saveBookProgress(book, cfi, percent) {
           progressBases.set(book.id, null);
         }
       }
-    } catch {}
+    } catch {
+      // Never reached anything. The server still has the place this device
+      // last confirmed, not the one on screen.
+      unsyncedReading.add(book.id);
+    }
   };
   progressSaveChain = progressSaveChain.then(save, save);
   return progressSaveChain;
@@ -342,7 +372,15 @@ async function saveBookProgress(book, cfi, percent) {
 // rejection or a focus refresh). No-ops when there's nothing to move to.
 async function resyncReaderTo(entry) {
   if (!readerView || !readerReady || !entry || !entry.cfi) return;
-  try { await readerView.goTo(entry.cfi); } catch {}
+  // foliate quietly ignores a jump asked for while a page turn is still under
+  // way, and a stale write's rejection arrives straight after one. Any arrival
+  // relocates, so try again until one does.
+  for (let tries = 0; tries < 10 && readerView; tries++) {
+    const before = readerView.lastLocation;
+    try { await readerView.goTo(entry.cfi); } catch { return; }
+    if (!readerView || readerView.lastLocation !== before) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
 }
 
 // When this tab regains focus, another device may have moved ahead while it sat
@@ -362,15 +400,88 @@ async function refreshOpenReaderProgress() {
   if (!progress.bookmarks[currentBook.id].length) delete progress.bookmarks[currentBook.id];
   updateBookmarkButton();
   if (tocTab === "bookmarks") renderBookmarks();
+  // The shell holds a write of ours the server hasn't taken, and the server has
+  // moved on since that write's baseline: it hands back both places.
+  if (offerConflict(currentBook.id, data.conflicts)) return;
   if (!entry || !entry.last_opened) return;
   const base = progressBases.get(currentBook.id);
   // A position this session wrote is not another device catching us up, however
   // new its timestamp looks — it is our own page turn coming back around.
   if (base && isNewerToken(entry.last_opened, base) && !isOwnWrite(currentBook.id, entry.cfi)) {
+    // Read here since the server last heard from us: both places are real.
+    if (unsyncedReading.has(currentBook.id) || resumePrompt) { offerResume(entry); return; }
+    // Nothing read here since: just catch up.
     progress.books[currentBook.id] = entry;
     progressBases.set(currentBook.id, entry.last_opened);
     await resyncReaderTo(entry);
   }
+}
+
+// Ask about a conflict the shell reports for this book, if there is one.
+// Returns whether it was taken care of.
+function offerConflict(bookId, conflicts) {
+  const remote = conflicts?.[bookId]?.remote;
+  if (!remote || !remote.cfi || !remote.last_opened) return false;
+  // The server's place is a page we wrote ourselves, landed after the queued
+  // write's baseline was taken. Nothing to ask: move the baseline up so the
+  // next page turn goes through.
+  if (isOwnWrite(bookId, remote.cfi)) {
+    progressBases.set(bookId, remote.last_opened);
+    return true;
+  }
+  offerResume(remote);
+  return true;
+}
+
+// "Latest progress <where> at <when>": where another device has got to, with
+// a choice between going there and staying on this device's place.
+function offerResume(entry) {
+  if (!currentBook || !readerView || visit || !entry?.cfi) return;
+  resumePrompt = { bookId: currentBook.id, entry };
+  els.resumeLabel.textContent = `Latest progress ${resumePlaceLabel(entry)} at ${resumeTimeLabel(entry.last_opened)}`;
+  els.resumeBar.classList.remove("hidden");
+}
+function closeResumePrompt() {
+  resumePrompt = null;
+  els.resumeBar.classList.add("hidden");
+}
+// The chapter the place falls in, and how far through the book it is.
+function resumePlaceLabel(entry) {
+  const percent = fmtPercent(entry.percent);
+  let index = null;
+  try { index = readerView?.resolveCFI(entry.cfi)?.index ?? null; } catch {}
+  const chapter = index == null ? null : chapters.find((c) => index >= c.firstSection && index <= c.lastSection);
+  return chapter?.tocItem ? `${tocItemLabel(chapter.tocItem)} (${percent})` : percent;
+}
+function resumeTimeLabel(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "another device";
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+  const day = fmtDate(iso);
+  if (day === "Today") return time;
+  if (day === "Yesterday") return `${time} yesterday`;
+  return `${time}, ${d.toLocaleDateString([], { month: "short", day: "numeric" })}`;
+}
+// Go to the other device's place. Writing it with its own token as the
+// baseline settles the conflict, on the server and in the shell's queue.
+async function acceptResume() {
+  const prompt = resumePrompt;
+  closeResumePrompt();
+  if (!prompt || currentBook?.id !== prompt.bookId) return;
+  const { entry } = prompt;
+  progress.books[prompt.bookId] = entry;
+  progressBases.set(prompt.bookId, entry.last_opened || null);
+  unsyncedReading.delete(prompt.bookId);
+  await resyncReaderTo(entry);
+  await saveBookProgress(currentBook, entry.cfi, Number(entry.percent) || 0);
+}
+// Keep reading here: this device's place replaces the other one.
+async function declineResume() {
+  const prompt = resumePrompt;
+  closeResumePrompt();
+  if (!prompt || currentBook?.id !== prompt.bookId) return;
+  progressBases.set(prompt.bookId, prompt.entry.last_opened || null);
+  if (currentLocation.cfi) await saveBookProgress(currentBook, currentLocation.cfi, currentLocation.fraction || 0);
 }
 
 async function loadLibrary() {
@@ -890,11 +1001,19 @@ async function openReader(book, nextVisit = null) {
   // `progress` map can be stale if this tab has been open while another device
   // advanced; restoring (and then re-saving) that stale spot is what clobbers
   // newer cross-device progress.
+  closeResumePrompt();
+  unsyncedReading.delete(book.id);
   try {
     await loadProgress();
     const fresh = progress.books[book.id];
     if (fresh) book = { ...book, ...fresh };
-    progressBases.set(book.id, fresh ? fresh.last_opened || null : null);
+    // A write the shell still has queued carries the baseline it was made
+    // from; its `last_opened` is only the device's clock. Carry on from the
+    // baseline, or the queue would forget what it was based on and overwrite
+    // whatever another device saved since.
+    const queued = !!fresh && Object.prototype.hasOwnProperty.call(fresh, "base");
+    if (queued) unsyncedReading.add(book.id);
+    progressBases.set(book.id, fresh ? (queued ? fresh.base : fresh.last_opened) || null : null);
   } catch { progressBases.set(book.id, null); }
   // Last session's writes are someone else's history now: if another device has
   // since moved to a position this one once wrote, that is a real catch-up.
@@ -1025,6 +1144,8 @@ async function openReader(book, nextVisit = null) {
     if (start) { try { await readerView.goTo(start); } catch {} }
     applyReaderTheme();
     readerReady = true;
+    // Opened at this device's place while another device's newer one waits.
+    if (!visit) offerConflict(book.id, progress.conflicts);
   }));
 }
 function renderToc(items, depth = 0) {
@@ -1129,7 +1250,7 @@ function openTocView(tab = "contents") {
   else els.tocList.scrollTop = 0;
 }
 function closeTocView() { els.tocView.classList.add("hidden"); setPassagesPolling(false); }
-function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; visit = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeReaderSheets(); pendingSelection = null; heldTint = null; settledStart = null; carrying = false; pressed = null; sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear(); updateVisitBar(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
+function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; visit = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeReaderSheets(); pendingSelection = null; heldTint = null; settledStart = null; carrying = false; pressed = null; sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear(); updateVisitBar(); closeResumePrompt(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
 function saveReaderSettings() { localStorage.setItem("ebook-library.reader", JSON.stringify(readerSettings)); }
 // Measure a font's average glyph advance once (it never changes for a face), so
 // we can solve for the font size that yields a given characters-per-line measure.
@@ -2791,6 +2912,11 @@ document.addEventListener("pointerdown", (e) => {
 els.readerClose.addEventListener("click", leaveReader);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshOpenReaderProgress(); });
 window.addEventListener("focus", refreshOpenReaderProgress);
+// Back online is when a place another device saved meanwhile becomes visible.
+// The shell fires this too when its connection comes back.
+window.addEventListener("online", refreshOpenReaderProgress);
+els.resumeGo.addEventListener("click", acceptResume);
+els.resumeStay.addEventListener("click", declineResume);
 els.tocToggle.addEventListener("click", openTocView);
 els.readerCollapse.addEventListener("click", hideReaderChrome);
 els.tocBack.addEventListener("click", closeTocView);
