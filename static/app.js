@@ -1011,7 +1011,7 @@ async function openReader(book, nextVisit = null) {
   applyReaderTheme();
   // A visit opens at its passage; reading opens at the saved place.
   const start = visit ? (visit.passage.source?.cfi || null)
-    : (book.cfi || (Number.isFinite(book.percent) ? { fraction: book.percent } : null));
+    : (book.cfi || (Number.isFinite(book.percent) && book.percent > 0 ? { fraction: book.percent } : null));
   try {
     await readerView.init({ lastLocation: start, showTextStart: true });
   } catch {
