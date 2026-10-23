@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Copy one server library to a CrossPoint reader over its File Transfer API.
+"""Mirror one server library into /HonLib on a CrossPoint reader.
 
-This runs on the book server. It never deletes device files and only writes
-inside /HonLib. Identical books already elsewhere on the device are adopted.
+This runs on the book server. It touches only its tracked books in /HonLib.
 """
 
 import argparse
@@ -127,6 +126,40 @@ def ensure_directory(base, dirs, path):
     dirs.add(path)
 
 
+def device_has_file(base, path, size):
+    return any(item.get("name") == posixpath.basename(path)
+               and not item.get("isDirectory") and int(item["size"]) == size
+               for item in list_dir(base, posixpath.dirname(path)))
+
+
+def move_file(base, files, dirs, old_path, destination, size):
+    ensure_directory(base, dirs, posixpath.dirname(destination))
+    form_post(base, "/move", {"path": old_path, "dest": posixpath.dirname(destination)})
+    if not device_has_file(base, destination, size):
+        raise RuntimeError(f"Device did not confirm move to {destination}")
+    files.pop(old_path, None)
+    files[destination] = size
+
+
+def delete_file(base, files, path):
+    if not path.startswith(DEST_ROOT + "/"):
+        raise ValueError(f"Refusing to delete outside {DEST_ROOT}: {path}")
+    form_post(base, "/delete", {"path": path})
+    if any(item.get("name") == posixpath.basename(path)
+           for item in list_dir(base, posixpath.dirname(path))):
+        raise RuntimeError(f"Device did not confirm deletion of {path}")
+    files.pop(path, None)
+
+
+def remove_empty_directories(base, dirs):
+    for directory in sorted(dirs, key=lambda path: path.count("/"), reverse=True):
+        if directory == DEST_ROOT or not directory.startswith(DEST_ROOT + "/"):
+            continue
+        if not list_dir(base, directory):
+            form_post(base, "/delete", {"path": directory})
+            dirs.remove(directory)
+
+
 def upload(base, book, directory):
     parsed = urllib.parse.urlsplit(base)
     if parsed.scheme != "http" or not parsed.hostname:
@@ -177,38 +210,49 @@ def sync(args):
     files, dirs = device_inventory(args.device)
     state = load_state(args.state, serial)
     sources = list(source_books(root))
-    copied = adopted = unchanged = 0
+    if not sources:
+        raise ValueError("Source library is empty; refusing to change the device")
+    expected = {relative for relative, _ in sources}
+    missing = set(state["books"]) - expected
+    if len(missing) > args.max_deletions and not args.allow_large_delete:
+        raise ValueError(f"{len(missing)} books disappeared from the source; "
+                         "refusing a large deletion without --allow-large-delete")
+    copied = moved = unchanged = deleted = 0
     for relative, book in sources:
         info = book.stat()
         destination = posixpath.join(DEST_ROOT, relative)
         record = state["books"].get(relative, {})
         recorded_path = record.get("device_path")
-        known_same = (record.get("size") == info.st_size
+        known_same = (recorded_path == destination
+                      and record.get("size") == info.st_size
                       and record.get("mtime_ns") == info.st_mtime_ns
-                      and isinstance(recorded_path, str)
                       and files.get(recorded_path) == info.st_size)
         if known_same:
             unchanged += 1
             continue
 
         local_hash = sha256_file(book)
-        if (record.get("sha256") == local_hash
+        if (recorded_path != destination
                 and isinstance(recorded_path, str)
-                and files.get(recorded_path) == info.st_size):
-            target = recorded_path
+                and files.get(recorded_path) == info.st_size
+                and files.get(destination) is None
+                and sha256_device_file(args.device, recorded_path) == local_hash):
+            if args.dry_run:
+                print(f"Would move into HonLib: {relative}")
+                moved += 1
+                continue
+            move_file(args.device, files, dirs, recorded_path, destination, info.st_size)
+            print(f"Moved into HonLib: {relative}", flush=True)
+            moved += 1
+            target = destination
+        elif (record.get("sha256") == local_hash
+                and files.get(destination) == info.st_size):
+            target = destination
         else:
-            candidates = [destination] + [
-                path for path, size in files.items()
-                if size == info.st_size and posixpath.basename(path) == book.name
-                and path != destination
-            ]
             target = None
-            for candidate in candidates:
-                if files.get(candidate) != info.st_size:
-                    continue
-                if sha256_device_file(args.device, candidate) == local_hash:
-                    target = candidate
-                    break
+            if (files.get(destination) == info.st_size
+                    and sha256_device_file(args.device, destination) == local_hash):
+                target = destination
 
         if target is None:
             if args.dry_run:
@@ -217,17 +261,14 @@ def sync(args):
                 continue
             ensure_directory(args.device, dirs, posixpath.dirname(destination))
             upload(args.device, book, posixpath.dirname(destination))
-            actual = next((item for item in list_dir(args.device, posixpath.dirname(destination))
-                           if item.get("name") == book.name and not item.get("isDirectory")), None)
-            if not actual or int(actual["size"]) != info.st_size:
+            if not device_has_file(args.device, destination, info.st_size):
                 raise RuntimeError(f"Device did not report the expected file size for {relative}")
             files[destination] = info.st_size
             target = destination
             copied += 1
             print(f"Copied: {relative}", flush=True)
         else:
-            adopted += 1
-            print(f"Already on device: {relative}", flush=True)
+            unchanged += 1
 
         if not args.dry_run:
             state["books"][relative] = {
@@ -238,7 +279,30 @@ def sync(args):
         if args.limit and copied >= args.limit:
             break
 
-    print(f"Books checked: {len(sources)}; copied: {copied}; already present: {adopted + unchanged}")
+    if not args.limit:
+        for relative in sorted(missing):
+            record = state["books"][relative]
+            path = record.get("device_path")
+            if not isinstance(path, str) or not path.startswith(DEST_ROOT + "/"):
+                raise ValueError(f"Removed book was outside the managed folder: {relative}")
+            if path in files:
+                if (files[path] != record.get("size")
+                        or sha256_device_file(args.device, path) != record.get("sha256")):
+                    raise ValueError(f"Device book changed since sync; keeping {path}")
+                if args.dry_run:
+                    print(f"Would remove: {relative}")
+                else:
+                    delete_file(args.device, files, path)
+                    print(f"Removed: {relative}", flush=True)
+            if not args.dry_run:
+                del state["books"][relative]
+                save_state(args.state, state)
+            deleted += 1
+        if deleted and not args.dry_run:
+            remove_empty_directories(args.device, dirs)
+
+    print(f"Books checked: {len(sources)}; copied: {copied}; moved: {moved}; "
+          f"removed: {deleted}; already present: {unchanged}")
     return 0
 
 
@@ -250,6 +314,8 @@ def main():
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--max-deletions", type=int, default=25)
+    parser.add_argument("--allow-large-delete", action="store_true")
     args = parser.parse_args()
     try:
         return sync(args)
