@@ -49,6 +49,8 @@ SERVER_PID=$!
 for _ in {1..30}; do
   if curl --fail --silent "${BASE_URL}/api/features" >/dev/null; then
     for test in "$@"; do
+      # Each browser file expects to start with no saved reading position.
+      rm "$TMP/config/progress.json" 2>/dev/null || true
       HONLIB_BASE_URL="${BASE_URL}" node "$ROOT/tests/browser/$test"
     done
     exit
