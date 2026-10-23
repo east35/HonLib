@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for Jim's XTEINK and copy new EPUBs
+
+[Timer]
+OnStartupSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=15s
+Unit=xteink-library-sync.service
+
+[Install]
+WantedBy=timers.target
