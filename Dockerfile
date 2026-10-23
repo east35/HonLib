@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # The optional IRC acquisition plugin is a submodule at acquisition/irc and
 # currently uses only the Python standard library.
 
-COPY app.py journal.py library.py progress.py web_bundle.py wsgi.py ./
+COPY app.py crosspoint_sync.py journal.py library.py progress.py web_bundle.py wsgi.py ./
 COPY acquisition ./acquisition
 COPY static ./static
 COPY scripts/build_web_bundle.py ./scripts/build_web_bundle.py

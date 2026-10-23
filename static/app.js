@@ -341,8 +341,10 @@ async function saveBookProgress(book, cfi, percent) {
 // Jump the open reader to a server-authoritative position (after a stale-write
 // rejection or a focus refresh). No-ops when there's nothing to move to.
 async function resyncReaderTo(entry) {
-  if (!readerView || !readerReady || !entry || !entry.cfi) return;
-  try { await readerView.goTo(entry.cfi); } catch {}
+  if (!readerView || !readerReady || !entry) return;
+  const target = entry.cfi || (Number.isFinite(entry.percent) ? { fraction: entry.percent } : null);
+  if (!target) return;
+  try { await readerView.goTo(target); } catch {}
 }
 
 // When this tab regains focus, another device may have moved ahead while it sat
@@ -1008,7 +1010,8 @@ async function openReader(book, nextVisit = null) {
   await awaitViewerSize();
   applyReaderTheme();
   // A visit opens at its passage; reading opens at the saved place.
-  const start = (visit ? visit.passage.source?.cfi : book.cfi) || null;
+  const start = visit ? (visit.passage.source?.cfi || null)
+    : (book.cfi || (Number.isFinite(book.percent) && book.percent > 0 ? { fraction: book.percent } : null));
   try {
     await readerView.init({ lastLocation: start, showTextStart: true });
   } catch {

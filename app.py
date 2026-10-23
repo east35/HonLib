@@ -9,7 +9,7 @@ import shutil
 import threading
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -19,6 +19,7 @@ from flask import Flask, abort, jsonify, redirect, render_template_string, reque
 import journal
 import library
 import progress
+import crosspoint_sync
 import web_bundle
 from acquisition.sites import find_site
 
@@ -62,6 +63,8 @@ AUTH_PASSWORD = os.environ.get("EBOOK_LIB_PASSWORD") or ""
 AUTH_USERNAME = os.environ.get("EBOOK_LIB_USERNAME") or ""
 COOKIE_SECURE = os.environ.get("EBOOK_LIB_COOKIE_SECURE") == "1"
 AUTH_ENABLED = bool(AUTH_PASSWORD)
+CROSSPOINT_SYNC_USERNAME = os.environ.get("EBOOK_LIB_CROSSPOINT_SYNC_USERNAME") or ""
+CROSSPOINT_SYNC_PASSWORD = os.environ.get("EBOOK_LIB_CROSSPOINT_SYNC_PASSWORD") or ""
 PUBLIC_PATHS = {"/login", "/logout", "/style.css", "/manifest.webmanifest", "/sw.js", "/favicon.ico"}
 PUBLIC_PREFIXES = ("/img/", "/vendor/")
 
@@ -138,6 +141,8 @@ def _credentials_ok(username, password):
 
 @app.before_request
 def _require_auth():
+    if request.path in ("/users/auth", "/syncs/progress") or request.path.startswith("/syncs/progress/"):
+        return None  # These routes check their own device credentials.
     if not AUTH_ENABLED or session.get("authed"):
         return None
     p = request.path
@@ -146,6 +151,89 @@ def _require_auth():
     if p.startswith("/api/"):
         return jsonify({"ok": False, "error": "auth required"}), 401
     return redirect("/login")
+
+
+def _crosspoint_sync_authorized():
+    if not CROSSPOINT_SYNC_USERNAME or not CROSSPOINT_SYNC_PASSWORD:
+        return False
+    expected_key = hashlib.md5(CROSSPOINT_SYNC_PASSWORD.encode("utf-8")).hexdigest()
+    return (hmac.compare_digest(request.headers.get("x-auth-user", ""), CROSSPOINT_SYNC_USERNAME)
+            and hmac.compare_digest(request.headers.get("x-auth-key", ""), expected_key))
+
+
+@app.route("/users/auth")
+def crosspoint_sync_auth():
+    if not _crosspoint_sync_authorized():
+        return jsonify({"code": 2001, "message": "Unauthorized"}), 401
+    return jsonify({"authorized": "OK"})
+
+
+@app.route("/syncs/progress/<document_id>")
+def crosspoint_sync_progress(document_id):
+    if not _crosspoint_sync_authorized():
+        return jsonify({"code": 2001, "message": "Unauthorized"}), 401
+    if not re.fullmatch(r"[a-f0-9]{32}", document_id):
+        return jsonify({})
+    matched = _crosspoint_sync_book(document_id)
+    if not matched:
+        return jsonify({})
+    book, path = matched
+    entry = progress.get_book_progress(book["id"])
+    if not entry or not isinstance(entry.get("percent"), (int, float)):
+        return jsonify({})
+    percentage = max(0.0, min(1.0, float(entry["percent"])))
+    xpath = crosspoint_sync.cfi_to_xpath(path, entry.get("cfi")) or ""
+    try:
+        timestamp = int(datetime.fromisoformat(entry["last_opened"].replace("Z", "+00:00")).timestamp())
+    except (KeyError, TypeError, ValueError):
+        timestamp = 0
+    response = jsonify({"document": document_id, "progress": xpath,
+                        "percentage": percentage, "device": "HonLib",
+                        "device_id": "honlib", "timestamp": timestamp})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _crosspoint_sync_book(document_id):
+    if not re.fullmatch(r"[a-f0-9]{32}", document_id or ""):
+        return None
+    matches = []
+    root = current_library_folder()
+    for book in library.scan_library(root, use_cache=True):
+        try:
+            path = library.resolve_book_path(root, book["path"])
+            if document_id in (crosspoint_sync.filename_document_id(path.name),
+                               crosspoint_sync.binary_document_id(path)):
+                matches.append((book, path))
+        except (OSError, ValueError):
+            continue
+    # An ambiguous filename must never send the progress of the wrong book.
+    return matches[0] if len(matches) == 1 else None
+
+
+@app.route("/syncs/progress", methods=["PUT"])
+def crosspoint_sync_upload():
+    if not _crosspoint_sync_authorized():
+        return jsonify({"code": 2001, "message": "Unauthorized"}), 401
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"code": 2003, "message": "Invalid progress"}), 400
+    document_id = data.get("document")
+    matched = _crosspoint_sync_book(document_id)
+    if not matched:
+        return jsonify({"code": 2004, "message": "Unknown or ambiguous book"}), 404
+    percentage = data.get("percentage")
+    if isinstance(percentage, bool) or not isinstance(percentage, (int, float)) or not 0 <= percentage <= 1:
+        return jsonify({"code": 2003, "message": "Invalid percentage"}), 400
+    xpath = data.get("progress")
+    if not isinstance(xpath, str) or len(xpath) > 1024:
+        return jsonify({"code": 2003, "message": "Invalid position"}), 400
+    book, path = matched
+    # An empty CFI deliberately clears the previous one. HonLib's reader then
+    # resumes by percentage when this EPUB's XPath cannot be resolved exactly.
+    cfi = crosspoint_sync.xpath_to_cfi(path, xpath) or ""
+    progress.update_book_progress(book["id"], cfi=cfi, percent=percentage)
+    return jsonify({"document": document_id, "timestamp": int(time.time())})
 
 
 @app.route("/login", methods=["GET", "POST"])
