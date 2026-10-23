@@ -84,6 +84,8 @@ reader behavior consistent.
   faces like Atkinson Hyperlegible), light/sepia/dark themes
   tuned for e-ink, and tap-a-word dictionary lookups.
 - **Progress sync** — your place in each book follows you between devices.
+- **CrossPoint progress test** — an XTEINK running CrossPoint can manually
+  exchange reading positions with HonLib for the same EPUB (see below).
 - **Bookmarks** — save exact page positions and return to them from the reader's
   Chapters / Bookmarks view.
 - **Highlights and journals** — highlight or underline a passage and it lands in
@@ -246,6 +248,8 @@ common ones:
 | `EBOOK_LIB_PASSWORD`      | _(empty)_        | Set to enable login. Empty = no auth (LAN only)  |
 | `EBOOK_LIB_USERNAME`      | _(empty)_        | Optional username for login                      |
 | `EBOOK_LIB_COOKIE_SECURE` | _(empty)_        | Set to `1` only when served entirely over HTTPS  |
+| `EBOOK_LIB_CROSSPOINT_SYNC_USERNAME` | _(empty)_ | XTEINK sync username; enable with a separate sync password |
+| `EBOOK_LIB_CROSSPOINT_SYNC_PASSWORD` | _(empty)_ | XTEINK sync password; never reuse your HonLib login password |
 
 The host port is set in `docker-compose.yml` (`8781:8765`) — change the left
 number if `8781` is taken.
@@ -257,6 +261,37 @@ a trusted home network but means anyone who can reach the port can use the app.
 Set a password before exposing it beyond your LAN, and only set
 `EBOOK_LIB_COOKIE_SECURE=1` when every entry point is HTTPS (e.g. behind a
 reverse proxy with TLS).
+
+### XTEINK CrossPoint progress test
+
+This first pass covers **both directions**. Read a book in HonLib, then use
+CrossPoint's **Sync Progress** action while that same EPUB is open on the XTEINK.
+Choose **Apply Remote** to continue from HonLib. After reading further on the
+XTEINK, choose **Sync Progress → Upload Local**; reopening the book in HonLib
+then resumes from the XTEINK position.
+
+1. Set `EBOOK_LIB_CROSSPOINT_SYNC_USERNAME` and
+   `EBOOK_LIB_CROSSPOINT_SYNC_PASSWORD` in `.env`, then run
+   `docker compose up -d --build`.
+2. Install CrossPoint on the XTEINK X4 using its official installer. Copy the
+   **same, unmodified EPUB file** from HonLib onto the XTEINK. Do not use the
+   upload option that optimizes or rewrites the EPUB for this test.
+3. On the XTEINK, open **Settings → Connectivity → CrossPoint Sync**. Enter the
+   sync username and password from `.env`. Set **Server Type** to **KoSync** and
+   **Sync Server URL** to your HonLib base address, such as
+   `http://192.168.1.10:8781`. Use **Authenticate** to check the connection.
+4. Set **Sync Behavior** to **Ask every time** for this test. Read several pages
+   in HonLib. Open that EPUB on the XTEINK, choose **Sync Progress**, then
+   **Apply Remote**. Read further on the XTEINK, sync again, and choose
+   **Upload Local**. Reopen the book in HonLib to verify the return trip.
+
+The device and HonLib must be able to reach each other on the same network.
+This bridge accepts both CrossPoint's binary and filename book matching modes;
+binary matching is safer when files have identical names. HonLib translates
+its saved text position in both directions when it can. If an EPUB's position
+cannot be translated, the reader uses the overall book percentage and the
+landing spot may be approximate. The sync URL should use HTTPS outside a
+trusted local network.
 
 ## Optional modules
 
