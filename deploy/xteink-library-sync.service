@@ -1,0 +1,8 @@
+[Unit]
+Description=Copy Jim's EPUB library to the XTEINK when File Transfer is available
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/Admin/srv/apps/Lib/xteink-library-sync
+ExecStart=/usr/bin/python3 /home/Admin/srv/apps/Lib/xteink-library-sync/sync.py --library /home/Admin/srv/library/books/j/library --device http://crosspoint.local --serial X4CB02EN26091906501 --state /home/Admin/srv/apps/Lib/xteink-library-sync/state.json
+TimeoutStartSec=30min
