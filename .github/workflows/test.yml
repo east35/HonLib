@@ -34,7 +34,7 @@ jobs:
 
   scripted-epub:
     name: Scripted EPUB (${{ matrix.browser }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -61,7 +61,7 @@ jobs:
 
   reader:
     name: Reader (${{ matrix.browser }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
