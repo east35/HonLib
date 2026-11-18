@@ -53,10 +53,7 @@
 .reader[data-reader-theme="dark"] .reader-fontmenu,.reader[data-reader-theme="dark"] .reader-popmenu{background:#000;color:#fff;border-color:#fff}
 .reader[data-reader-theme="dark"] .reader-font-item{background:#000;color:#fff;border-color:#fff}
 .reader[data-reader-theme="dark"] .reader-refresh-slider{accent-color:#fff}
-.reader-flash{position:fixed;inset:0;z-index:9999;pointer-events:none;background:#000}
-.reader-flash.hidden{display:none!important}
-.reader-flash.phase-black{background:#000}
-.reader-flash.phase-white{background:#fff}
+.reader.refresh-inverted{filter:invert(1)}
 .dict-popover{position:absolute;z-index:45;left:50%;bottom:12px;transform:translateX(-50%);width:min(620px,calc(100vw - 24px));max-height:calc(100vh - 90px);overflow:hidden;background:var(--bg);color:var(--fg);border:2px solid var(--fg);padding:12px 14px;font-size:15px;line-height:1.4}
 .dict-popover.hidden{display:none!important}
 .dict-close{position:absolute;top:10px;right:10px;min-width:64px;min-height:38px;border:2px solid var(--fg);background:var(--bg);color:var(--fg);padding:4px 8px;font:inherit;font-size:13px;font-weight:800;cursor:pointer}
