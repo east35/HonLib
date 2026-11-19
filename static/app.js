@@ -15,7 +15,7 @@ const els = {
   appUpdate: $("#app-update"), appUpdateMessage: $("#app-update-message"), appUpdateApply: $("#app-update-apply"), appUpdateDismiss: $("#app-update-dismiss"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
   bookActionsModal: $("#book-actions-modal"), bookActionsTitle: $("#book-actions-title"), bookActionReset: $("#book-action-reset"), bookActionDelete: $("#book-action-delete"),
-  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerFlash: $("#reader-flash"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), passageSheet: $("#passage-sheet"), tocPassagesTab: $("#toc-passages-tab"), passagesPanel: $("#passages-panel"), passagesList: $("#passages-list"), passagesScopeBook: $("#passages-scope-book"), passagesScopeJournal: $("#passages-scope-journal"), passagesSearch: $("#passages-search"), passagesTag: $("#passages-tag"), visitBar: $("#visit-bar"), visitLabel: $("#visit-label"), visitBack: $("#visit-back"), visitPlace: $("#visit-place"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
+  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), passageSheet: $("#passage-sheet"), tocPassagesTab: $("#toc-passages-tab"), passagesPanel: $("#passages-panel"), passagesList: $("#passages-list"), passagesScopeBook: $("#passages-scope-book"), passagesScopeJournal: $("#passages-scope-journal"), passagesSearch: $("#passages-search"), passagesTag: $("#passages-tag"), visitBar: $("#visit-bar"), visitLabel: $("#visit-label"), visitBack: $("#visit-back"), visitPlace: $("#visit-place"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
 };
 
 let currentJob = null;
@@ -1132,7 +1132,7 @@ function openTocView(tab = "contents") {
   else els.tocList.scrollTop = 0;
 }
 function closeTocView() { els.tocView.classList.add("hidden"); setPassagesPolling(false); }
-function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; visit = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); closeTocView(); closeReaderPopups(); closeReaderSheets(); pendingSelection = null; heldTint = null; settledStart = null; carrying = false; pressed = null; sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear(); updateVisitBar(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
+function closeReader() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); if (readerView) { readerView.close(); readerView.remove(); } readerView = null; currentBook = null; visit = null; lastRelocateMarker = null; pageTurnsSinceRefresh = 0; clearTimeout(refreshFlashTimer); els.reader.classList.remove("refresh-inverted"); closeTocView(); closeReaderPopups(); closeReaderSheets(); pendingSelection = null; heldTint = null; settledStart = null; carrying = false; pressed = null; sheetSpan = null; markRects.clear(); tints.clear(); drawnMarks.clear(); updateVisitBar(); els.reader.classList.add("hidden"); document.body.classList.remove("reader-open"); loadLibrary(); }
 function saveReaderSettings() { localStorage.setItem("ebook-library.reader", JSON.stringify(readerSettings)); }
 // Measure a font's average glyph advance once (it never changes for a face), so
 // we can solve for the font size that yields a given characters-per-line measure.
@@ -1401,23 +1401,12 @@ function closeReaderPopups() {
   closeReaderRefreshMenu();
 }
 function triggerReaderRefreshFlash() {
-  if (!els.readerFlash) return;
   clearTimeout(refreshFlashTimer);
-  const flash = els.readerFlash;
-  // E-ink displays only clear ghosting when the controller runs a full
-  // waveform refresh. To force that from the browser we paint solid full-
-  // screen black, hold it long enough for the panel to settle, then paint
-  // solid white and hold again. A fast fade doesn't trigger a global update.
-  flash.classList.remove("hidden", "phase-black", "phase-white");
-  void flash.offsetWidth;
-  flash.classList.add("phase-black");
+  // Invert the fully rendered reader long enough to trigger an e-ink waveform
+  // refresh without covering the page or interrupting reading.
+  els.reader.classList.add("refresh-inverted");
   refreshFlashTimer = setTimeout(() => {
-    flash.classList.remove("phase-black");
-    flash.classList.add("phase-white");
-    refreshFlashTimer = setTimeout(() => {
-      flash.classList.remove("phase-white");
-      flash.classList.add("hidden");
-    }, 400);
+    els.reader.classList.remove("refresh-inverted");
   }, 400);
 }
 function readerRelocateMarker(loc) {
