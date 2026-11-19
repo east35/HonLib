@@ -35,6 +35,7 @@ jobs:
   scripted-epub:
     name: Scripted EPUB (${{ matrix.browser }})
     runs-on: ubuntu-24.04
+    container: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -52,8 +53,6 @@ jobs:
         run: npm ci
       - name: Audit npm dependencies
         run: npm audit
-      - name: Install browser
-        run: npx playwright install --with-deps ${{ matrix.browser }}
       - name: Test scripted EPUB containment
         env:
           HONLIB_BROWSER: ${{ matrix.browser }}
