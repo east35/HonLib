@@ -15,7 +15,7 @@ const els = {
   appUpdate: $("#app-update"), appUpdateMessage: $("#app-update-message"), appUpdateApply: $("#app-update-apply"), appUpdateDismiss: $("#app-update-dismiss"),
   openMenu: $("#open-menu"), drawer: $("#drawer"), libSearch: $("#lib-search"), viewToggle: $("#view-toggle"), sortToggle: $("#sort-toggle"), sortDir: $("#sort-dir"), filterAuthor: $("#filter-author"), filterGroup: $("#filter-group"), clearFilters: $("#clear-filters"), libFont: $("#lib-font"),
   bookActionsModal: $("#book-actions-modal"), bookActionsTitle: $("#book-actions-title"), bookActionReset: $("#book-action-reset"), bookActionDelete: $("#book-action-delete"),
-  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), passageSheet: $("#passage-sheet"), tocPassagesTab: $("#toc-passages-tab"), passagesPanel: $("#passages-panel"), passagesList: $("#passages-list"), passagesScopeBook: $("#passages-scope-book"), passagesScopeJournal: $("#passages-scope-journal"), passagesSearch: $("#passages-search"), passagesTag: $("#passages-tag"), visitBar: $("#visit-bar"), visitLabel: $("#visit-label"), visitBack: $("#visit-back"), visitPlace: $("#visit-place"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
+  reader: $("#reader"), viewer: $("#epub-viewer"), readerLoading: $("#reader-loading"), readerClose: $("#reader-close"), tocView: $("#toc-view"), tocList: $("#toc-list"), tocLocation: $("#toc-location"), tocBack: $("#toc-back"), tocToggle: $("#toc-toggle"), tocContentsTab: $("#toc-contents-tab"), tocBookmarksTab: $("#toc-bookmarks-tab"), bookmarksList: $("#bookmarks-list"), bookmarkToggle: $("#bookmark-toggle"), readerTheme: $("#reader-theme"), readerFullscreen: $("#reader-fullscreen"), readerSpread: $("#reader-spread"), readerColumns: $("#reader-columns"), readerProgressToggle: $("#reader-progress-toggle"), readerProgress: $("#reader-progress"), readerProgressTrack: $("#reader-progress-track"), readerProgressFill: $("#reader-progress-fill"), readerProgressSegments: $("#reader-progress-segments"), readerProgressLabel: $("#reader-progress-label"), readerProgressCycle: $("#reader-progress-cycle"), sizeToggle: $("#reader-size"), readerFonts: $("#reader-fonts"), readerRefresh: $("#reader-refresh"), readerRefreshPanel: $("#reader-refresh-panel"), readerRefreshSlider: $("#reader-refresh-slider"), readerRefreshValue: $("#reader-refresh-value"), readerCollapse: $("#reader-collapse"), dictPopover: $("#dict-popover"), passageSheet: $("#passage-sheet"), tocPassagesTab: $("#toc-passages-tab"), passagesPanel: $("#passages-panel"), passagesList: $("#passages-list"), passagesScopeBook: $("#passages-scope-book"), passagesScopeJournal: $("#passages-scope-journal"), passagesSearch: $("#passages-search"), passagesTag: $("#passages-tag"), visitBar: $("#visit-bar"), visitLabel: $("#visit-label"), visitBack: $("#visit-back"), visitPlace: $("#visit-place"), hitLeft: $("#reader-hit-left"), hitCenter: $("#reader-hit-center"), hitRight: $("#reader-hit-right"), hitBack: $("#reader-hit-back"), hitMenu: $("#reader-hit-menu"),
 };
 
 let currentJob = null;
@@ -202,6 +202,7 @@ const READER_GAP_PCT = 6;         // side padding (% of view) when constrained
 const READER_MARGIN_PX = 40;      // top/bottom padding when constrained
 const READER_MAX_INLINE = 720;    // max column width (px) when constrained
 const READER_PAD_REM = 2;         // device padding (rem) when unconstrained
+const SPREAD_MIN_WIDTH = 640;     // two readable pages, not two phone slivers
 // Progressive scaling. A fixed cpl makes type scale straight-line with column
 // width, so narrow screens get tiny text. Instead we ease the cpl target down
 // as the column narrows: the factor is 1 at/above READER_WIDTH_FULL (large
@@ -224,6 +225,8 @@ const FS_EXIT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" 
 // margins; "off" (full) shows text spanning edge to edge.
 const COLUMNS_ON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16M20 4v16" /><path d="M9 8h6M9 12h6M9 16h6" /></svg>';
 const COLUMNS_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h18M3 12h18M3 16h18" /></svg>';
+const SPREAD_ON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v15" /><path d="M12 7c-2-1.3-4.7-1.7-8-1.2v13c3.3-.5 6-.1 8 1.2" /><path d="M12 7c2-1.3 4.7-1.7 8-1.2v13c-3.3-.5-6-.1-8 1.2" /></svg>';
+const SPREAD_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v16H5z" /><path d="M9 8h6M9 12h6M9 16h4" /></svg>';
 // Reading-progress toggle. "On" shows a part-filled bar; "off" an empty one.
 const PROGRESS_ON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="10" width="18" height="4" rx="2" /><path d="M6 12h5" stroke-width="3" /></svg>';
 const PROGRESS_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="10" width="18" height="4" rx="2" /></svg>';
@@ -1049,14 +1052,10 @@ function currentBookmark() {
   return currentLocation.cfi ? currentBookmarks().find((item) => item.cfi === currentLocation.cfi) : null;
 }
 function updateBookmarkButton() {
-  if (!els.bookmarkToggle) return;
   const marked = !!currentBookmark();
   const available = !!currentBook && !!currentLocation.cfi;
   els.bookmarkToggle.classList.toggle("active", marked);
   els.bookmarkToggle.classList.toggle("unavailable", !available);
-  els.bookmarkToggle.setAttribute("aria-pressed", String(marked));
-  els.bookmarkToggle.setAttribute("aria-label", marked ? "Remove bookmark" : "Add bookmark");
-  els.bookmarkToggle.title = marked ? "Remove bookmark" : "Add bookmark";
 }
 function renderBookmarks() {
   const items = currentBookmarks().slice().sort((a, b) => (a.percent || 0) - (b.percent || 0));
@@ -1183,7 +1182,28 @@ function updateSizeButtons() {
   });
 }
 function columnsConstrained() { return readerSettings.columns !== false; }
+function spreadEnabled() { return readerSettings.spread === true; }
+// Spread is a layout response, not a request to rotate the device. This avoids
+// the orientation feedback loop caused by locking the screen from JavaScript:
+// the user's physical rotation makes the viewport wide, and that alone opens
+// the second page. Upright and small screens always remain single-page.
+function spreadActive() {
+  const width = els.viewer.clientWidth || window.innerWidth;
+  const height = els.viewer.clientHeight || window.innerHeight;
+  return spreadEnabled() && width >= SPREAD_MIN_WIDTH && width > height;
+}
 function rootFontPx() { return parseFloat(getComputedStyle(document.documentElement).fontSize) || 16; }
+function updateSpreadButton() {
+  if (!els.readerSpread) return;
+  const enabled = spreadEnabled();
+  const active = spreadActive();
+  els.readerSpread.innerHTML = enabled ? SPREAD_ON_SVG : SPREAD_OFF_SVG;
+  els.readerSpread.setAttribute("aria-pressed", String(enabled));
+  els.readerSpread.title = !enabled ? "Two-page spread in landscape: off"
+    : active ? "Two-page spread in landscape: on"
+      : "Two-page spread: rotate to landscape";
+  els.reader.dataset.spread = active ? "active" : enabled ? "waiting" : "off";
+}
 function updateColumnsButton() {
   if (!els.readerColumns) return;
   const constrained = columnsConstrained();
@@ -1440,22 +1460,32 @@ function noteReaderRelocate(loc) {
 // forces foliate to re-lay-out, refreshing the column width we then measure.
 function applyReaderLayout() {
   if (!readerView) return;
+  const spread = spreadActive();
+  readerView.renderer.setAttribute("max-column-count", spread ? "2" : "1");
   if (columnsConstrained()) {
-    readerView.renderer.setAttribute("gap", `${READER_GAP_PCT}%`);
-    readerView.renderer.setAttribute("margin", `${READER_MARGIN_PX}px`);
+    // A spread already has a strong visual break at its centre fold and is
+    // intended to make fuller use of a wide screen. Keep breathing room, but
+    // use half the single-page gutters and top/bottom margin.
+    readerView.renderer.setAttribute("gap", `${spread ? READER_GAP_PCT / 2 : READER_GAP_PCT}%`);
+    readerView.renderer.setAttribute("margin", `${spread ? READER_MARGIN_PX / 2 : READER_MARGIN_PX}px`);
     readerView.renderer.setAttribute("max-inline-size", `${READER_MAX_INLINE}px`);
   } else {
     const size = els.viewer.clientWidth || window.innerWidth;
-    const padPx = READER_PAD_REM * rootFontPx();
+    const padPx = READER_PAD_REM * rootFontPx() * (spread ? .5 : 1);
     const gapPct = Math.max(1, Math.min(24, (2 * padPx / size) * 100));
     readerView.renderer.setAttribute("gap", `${gapPct}%`);
     readerView.renderer.setAttribute("margin", `${padPx}px`);
-    readerView.renderer.setAttribute("max-inline-size", "100000px");
+    // A huge max-inline-size makes Foliate choose one column. In a spread,
+    // offer half the viewport to each page so fill-width still fills the full
+    // spread (minus the same small device padding) instead of collapsing back
+    // to one oversized page.
+    readerView.renderer.setAttribute("max-inline-size", spread ? `${Math.max(1, size / 2 - 1)}px` : "100000px");
   }
 }
 function applyReaderTheme() {
   els.reader.dataset.readerTheme = readerSettings.theme;
   updateSizeButtons();
+  updateSpreadButton();
   updateColumnsButton();
   updateProgressButton();
   updateRefreshButton();
@@ -1581,6 +1611,15 @@ function turnAtHostX(hostX) {
   if (hostX < window.innerWidth * PREV_ZONE_FRAC) readerPrev();
   else readerNext();
 }
+// The top controls are gestures rather than blocking overlays. A short tap is
+// still Back (or Bookmark in the upper-right corner), but the book receives
+// the pointerdown first, so holding the same word can become a selection.
+function topControlTap(hostX, hostY) {
+  if (hostY > 64) return false;
+  if (hostX >= window.innerWidth - 82) toggleBookmark();
+  else leaveReader();
+  return true;
+}
 // Text selected in the book whose sheet is not up yet (it waits for the
 // selection to settle).
 function bookSelecting() {
@@ -1589,7 +1628,9 @@ function bookSelecting() {
   } catch { return false; }
 }
 function pageTurnTap(e, dictWasOpen) {
-  if (readerTapConsumed(dictWasOpen)) return;
+  if (dictTapConsumed(dictWasOpen)) return;
+  if (topControlTap(e.clientX, e.clientY)) return;
+  if (!els.reader.classList.contains("chrome-hidden")) { hideReaderChrome(); return; }
   // A tap beside the text while some of it is selected puts the selection away.
   if (pendingSelection || bookSelecting()) { dropSelection(); return; }
   turnAtHostX(e.clientX);
@@ -1634,10 +1675,6 @@ onReaderTap(els.hitMenu, (e, dictWasOpen) => {
 });
 els.hitMenu.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleReaderChrome(); }
-});
-onReaderTap(els.bookmarkToggle, toggleBookmark);
-els.bookmarkToggle.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleBookmark(); }
 });
 // The bottom-right corner sits inside the right page-turn overlay, so it takes
 // the same first-tap dismissals before it starts cycling the progress detail.
@@ -1804,15 +1841,17 @@ function wireReaderInput(doc) {
       return;
     }
     if (selecting()) return;
-    if (readerTapConsumed()) return;
+    if (dictTapConsumed()) return;
+    const frame = doc.defaultView && doc.defaultView.frameElement;
+    const fr = frame ? frame.getBoundingClientRect() : els.viewer.getBoundingClientRect();
+    if (topControlTap(fr.left + e.clientX, fr.top + e.clientY)) return;
+    if (!els.reader.classList.contains("chrome-hidden")) { hideReaderChrome(); return; }
     // Let foliate handle in-book links.
     if (e.target.closest && e.target.closest("a")) return;
     // A tap on a highlight or underline opens that passage instead of turning.
     const marked = passageAt(doc, e.clientX, e.clientY);
     if (marked) { openPassageView(marked.id); return; }
     // Convert the tap out of chapter-strip space before applying the zone rule.
-    const frame = doc.defaultView && doc.defaultView.frameElement;
-    const fr = frame ? frame.getBoundingClientRect() : els.viewer.getBoundingClientRect();
     turnAtHostX(fr.left + e.clientX);
   }, true);
   doc.addEventListener("selectionchange", () => {
@@ -2104,6 +2143,18 @@ async function lookupWord(word) {
   try { data = await api(`/api/dictionary/${encodeURIComponent(word.toLowerCase())}`); }
   catch { if (reqId === dictReqId) showDictPopover(`<div class="dict-word">${escapeHtml(word)}</div><div class="dict-status">Couldn't reach the dictionary.</div>`); return; }
   if (reqId !== dictReqId) return; // a newer selection superseded this lookup
+  // Wiktionary often gives an inflected word only a circular-looking note such
+  // as "plural of refraction". Follow that lemma once and show its substantive
+  // entry instead. Only replace an entry when all of its definitions agree
+  // that it is the same plural form, so ordinary senses ending in "s" remain.
+  const lemma = dictionaryLemma(data);
+  if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
+    try {
+      const base = await api(`/api/dictionary/${encodeURIComponent(lemma.toLowerCase())}`);
+      if (reqId !== dictReqId) return;
+      if (base && !base.notFound && (base.meanings || []).length) data = base;
+    } catch {}
+  }
   if (!data || data.notFound || !(data.meanings || []).length) {
     showDictPopover(`<div class="dict-word">${escapeHtml(word)}</div><div class="dict-status">No definition found.</div>`);
     return;
@@ -2118,6 +2169,17 @@ async function lookupWord(word) {
     ? `<div class="dict-attribution">From <a href="${escapeHtml(data.sourceUrl)}" target="_blank" rel="noopener noreferrer">Wiktionary</a>, via <a href="https://freedictionaryapi.com/" target="_blank" rel="noopener noreferrer">FreeDictionaryAPI.com</a> under <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>.</div>`
     : "";
   showDictPopover(head + body + attribution);
+}
+function dictionaryLemma(data) {
+  const definitions = (data?.meanings || []).flatMap((m) => m.definitions || []).filter(Boolean);
+  if (!definitions.length) return null;
+  const lemmas = definitions.map((definition) => {
+    const text = String(definition).trim();
+    return text.match(/^plural(?:\s+form)?\s+of\s+[“\"']?([a-z][a-z'-]*)/i)?.[1]
+      || text.match(/^([a-z][a-z'-]*),?\s+plural\b/i)?.[1]
+      || null;
+  });
+  return lemmas.every(Boolean) && new Set(lemmas.map((x) => x.toLowerCase())).size === 1 ? lemmas[0] : null;
 }
 function showDictPopover(html) {
   // Save keeps the word as a passage. Offered whenever there is a selection to
@@ -2793,6 +2855,7 @@ els.tocList.addEventListener("click", (e) => { const b = e.target.closest("butto
 els.bookmarksList.addEventListener("click", (e) => { const b = e.target.closest("button[data-cfi]"); if (b && readerView) { readerView.goTo(b.dataset.cfi); closeTocView(); } });
 els.readerTheme.addEventListener("click", () => { readerSettings.theme = readerSettings.theme === "dark" ? "light" : "dark"; saveReaderSettings(); applyReaderTheme(); });
 els.readerFullscreen.addEventListener("click", toggleFullscreen);
+els.readerSpread.addEventListener("click", () => { readerSettings.spread = !spreadEnabled(); saveReaderSettings(); applyReaderTheme(); });
 els.readerColumns.addEventListener("click", () => { readerSettings.columns = !columnsConstrained(); saveReaderSettings(); applyReaderTheme(); });
 els.readerProgressToggle.addEventListener("click", () => {
   const on = !progressEnabled();

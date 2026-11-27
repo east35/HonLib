@@ -4,7 +4,8 @@
   "scripts": {
     "test:scripted-epub": "bash scripts/test-scripted-epub.sh",
     "test:scripted-epub:browser": "node tests/browser/scripted-epub.mjs",
-    "test:reader": "bash scripts/test-reader.sh chapter-progress.mjs touch-boundary.mjs sdk-proxy-progress.mjs shell-contract.mjs update-notice.mjs book-actions.mjs",
+    "test:reader": "bash scripts/test-reader.sh chapter-progress.mjs spread-view.mjs dictionary-inflection.mjs touch-boundary.mjs sdk-proxy-progress.mjs shell-contract.mjs update-notice.mjs book-actions.mjs",
+    "test:spread-view": "bash scripts/test-reader.sh spread-view.mjs",
     "test:chapter-progress": "bash scripts/test-reader.sh chapter-progress.mjs touch-boundary.mjs",
     "test:sdk-proxy-progress": "bash scripts/test-reader.sh sdk-proxy-progress.mjs",
     "test:shell-contract": "bash scripts/test-reader.sh shell-contract.mjs",

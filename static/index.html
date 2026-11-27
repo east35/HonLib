@@ -182,6 +182,7 @@
         <button id="reader-close" class="btn icon-btn" title="Back to library" aria-label="Back to library"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg></button>
         <button id="reader-theme" class="btn icon-btn" title="Toggle reader theme" aria-label="Toggle reader theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg></button>
         <button id="reader-fullscreen" class="btn icon-btn" title="Toggle fullscreen" aria-label="Toggle fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3" /></svg></button>
+        <button id="reader-spread" class="btn icon-btn" title="Two-page spread in landscape" aria-label="Two-page spread in landscape" aria-pressed="false"></button>
         <button id="reader-columns" class="btn icon-btn" title="Column width" aria-label="Toggle column constraint"></button>
         <button id="reader-progress-toggle" class="btn icon-btn" title="Reading progress" aria-label="Toggle reading progress"></button>
         <div id="reader-size" class="size-toggle" role="group" aria-label="Text size">
@@ -235,9 +236,9 @@
       <button id="visit-place" class="btn" type="button">Go to my place</button>
     </div>
     <div id="epub-viewer"></div>
-    <button id="bookmark-toggle" class="bookmark-toggle" type="button" title="Add bookmark" aria-label="Add bookmark" aria-pressed="false">
+    <div id="bookmark-toggle" class="bookmark-toggle" aria-hidden="true">
       <svg viewBox="0 0 24 32" aria-hidden="true"><path d="M2 1h20v29l-10-7-10 7z" /></svg>
-    </button>
+    </div>
     <div id="dict-popover" class="dict-popover hidden" role="dialog" aria-live="polite"></div>
     <div id="passage-sheet" class="passage-sheet hidden" role="dialog" aria-label="Passage"></div>
     <div id="reader-loading" class="reader-loading hidden" role="status" aria-live="polite">Loading…</div>
