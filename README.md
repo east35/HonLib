@@ -48,6 +48,12 @@ typographic principles:
     printed page
   - **Adaptive** — reflows to the viewport, for whatever device you're holding
 
+On a wide device, the reader's spread button adds a second page when the device
+is turned to landscape and returns to one page in portrait. HonLib does not lock
+or rotate the screen itself. Constrained and adaptive sizing continue to apply
+to each page in the spread, so the view does not inherit the oversized margins
+common to print-like two-page readers.
+
 The goal is that the typography just works, the same way it would in a
 well-set book. Bump the text size with + / − if you want it bigger or smaller —
 line length, spacing, and column width all adjust automatically to stay in

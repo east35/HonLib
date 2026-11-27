@@ -29,15 +29,12 @@
 .reader[data-reader-theme="dark"] .reader-progress-label{color:#fff}
 .progress-cycle{position:absolute;right:0;bottom:0;z-index:27;width:132px;height:56px;padding:0;background:transparent;border:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .progress-cycle.hidden{display:none!important}
-/* Full-width edge bars: the top one closes the book, the bottom one toggles the
-   reading menu. Both are invisible (the reading surface stays clean) and sit
-   under the two right-hand corner targets, so .bookmark-toggle (z 26) and
-   .progress-cycle (z 27) still win where they overlap. They also sit above the
-   .hit page-turn overlays (z 20), so an edge tap near the top or bottom of the
-   screen is a back/menu tap, not a page turn. The controls sheet is z 30, so it
-   stays tappable over the bottom bar while the menu is open. */
+/* Edge bars catch only genuinely empty screen edges. Top taps over the book are
+   recognized inside its iframe so a hold can become a text selection; the 12px
+   host strip is merely a fallback for the sliver no page content can occupy.
+   The bottom bar toggles the menu and stays below its visible control sheet. */
 .hit-bar{position:absolute;left:0;right:0;z-index:24;padding:0;background:transparent;border:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.hit-bar.back{top:0;height:64px}
+.hit-bar.back{top:0;height:12px}
 .hit-bar.menu{bottom:0;height:56px}
 .reader[data-reader-theme="dark"]{background:#000!important;color:#fff!important}.reader[data-reader-theme="dark"] .reader-sheet,.reader[data-reader-theme="dark"] .toc-view{background:#000!important;color:#fff!important;border-color:#fff}.reader[data-reader-theme="dark"] .toc-view-head,.reader[data-reader-theme="dark"] .toc-location,.reader[data-reader-theme="dark"] .toc-item{border-color:#fff}.reader[data-reader-theme="dark"] .toc-item{background:#000;color:#fff}.reader[data-reader-theme="dark"] .toc-item.current{background:#fff;color:#000}.reader[data-reader-theme="dark"] .btn{background:#000;color:#fff;border-color:#fff}.reader[data-reader-theme="dark"] .size-toggle,.reader[data-reader-theme="dark"] .size-toggle button,.reader[data-reader-theme="dark"] .size-toggle .size-label{border-color:#fff}.reader[data-reader-theme="dark"] .size-toggle button,.reader[data-reader-theme="dark"] .size-toggle .size-label{background:#000;color:#fff}.reader[data-reader-theme="dark"] .size-toggle button:disabled{color:#fff}.reader-sheet{position:absolute;left:12px;right:12px;bottom:12px;z-index:30;background:var(--bg);color:var(--fg);border:2px solid var(--fg);padding:10px;transition:transform .15s,opacity .15s}.reader-controls{display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;row-gap:8px}.size-toggle{display:inline-flex;flex:0 0 auto;width:128px;height:46px;border:2px solid var(--fg)}.size-toggle button,.size-toggle .size-label{display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);line-height:1}.size-toggle button{flex:1;border:0;border-right:2px solid var(--fg);padding:0;cursor:pointer;font-size:24px}.size-toggle .size-label{flex:0 0 auto;padding:0 16px;border-right:2px solid var(--fg);font-family:Georgia,"Times New Roman",serif;font-size:18px}.size-font-trigger{appearance:none}.size-toggle>*:last-child{border-right:0}.size-toggle button:disabled{opacity:.3;cursor:default}.reader.chrome-hidden .reader-sheet{opacity:0;pointer-events:none;transform:translateY(calc(100% + 16px))}.hit.center{left:3%;right:3%}.reader .hit{z-index:20;pointer-events:none}.reader .hit.left,.reader .hit.right{pointer-events:auto}
 .reader-popmenu,.reader-fontmenu{position:absolute;left:0;right:0;bottom:calc(100% + 8px);background:var(--bg);color:var(--fg);border:2px solid var(--fg);max-height:55vh;overflow:auto;-webkit-overflow-scrolling:touch}
@@ -101,7 +98,7 @@
 .bookmark-item-label{display:block;font-weight:800}
 .bookmark-item-meta{display:block;margin-top:3px;font-size:13px;opacity:.78}
 .bookmarks-empty{padding:24px 16px;font-size:15px}
-.bookmark-toggle{position:absolute;top:0;right:12px;z-index:26;width:58px;height:64px;padding:8px 13px 18px;background:transparent;color:#000;border:0;cursor:pointer}
+.bookmark-toggle{position:absolute;top:0;right:12px;z-index:26;width:58px;height:64px;padding:8px 13px 18px;background:transparent;color:#000;border:0;pointer-events:none}
 .bookmark-toggle svg{display:block;width:28px;height:38px;fill:#fff;stroke:#000;stroke-width:2;visibility:hidden}
 .bookmark-toggle.active svg{fill:#000;visibility:visible}
 .bookmark-toggle.unavailable{visibility:hidden}
