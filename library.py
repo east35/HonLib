@@ -2,6 +2,7 @@ import base64
 import hashlib
 import mimetypes
 import posixpath
+import re
 import shutil
 import threading
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import ebooklib
 from ebooklib import epub
+from functools import lru_cache
 
 
 _IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
@@ -193,7 +195,7 @@ def read_book_metadata(path):
         except Exception:
             pass
     identifier = _unique_identifier(path)
-    return {"title": title, "author": author, "series": series, "series_index": series_index, "genre": genre, "identifier": identifier, "cover_mime": cover_mime, "has_cover": has_cover}
+    return {"title": title, "author": author, "series": series, "series_index": series_index, "genre": genre, "identifier": identifier, "club_id": read_club_id(path), "cover_mime": cover_mime, "has_cover": has_cover}
 
 
 def read_cover(path):
@@ -312,6 +314,7 @@ def _scan_library_uncached(root):
             "series": meta["series"],
             "series_index": meta["series_index"],
             "genre": meta["genre"],
+            "club_id": meta["club_id"],
             "has_cover": meta["has_cover"],
             "cover_url": f"/api/book/{book_id}/cover" if meta["has_cover"] else None,
         })
@@ -525,3 +528,201 @@ def replace_book_cover(path, content):
         return {href: content}
     _rewrite_epub(path, transform)
     return read_book_metadata(path)
+
+
+# ---- Book club ------------------------------------------------------------
+# A book club book carries a hidden <meta name="honlib:club"> in its OPF. Both
+# readers get a byte-identical copy of the file, so the tag (and the chapter
+# list worked out below) is the same on both sides, whatever either of them
+# later renames the file to.
+
+CLUB_META = "honlib:club"
+_CLUB_ID = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+_SPINE_STEP = re.compile(r"^epubcfi\(/6/(\d+)")
+
+
+def _opf_root(zf):
+    name = _opf_path(zf)
+    return name, ET.fromstring(zf.read(name))
+
+
+def read_club_id(path):
+    try:
+        with zipfile.ZipFile(path) as zf:
+            _, root = _opf_root(zf)
+    except Exception:
+        return None
+    for el in root.iter():
+        if el.tag.endswith("meta") and el.get("name") == CLUB_META:
+            value = (el.get("content") or "").strip()
+            return value if _CLUB_ID.match(value) else None
+    return None
+
+
+_CLUB_META_TAG = re.compile(rb'\s*<(?:[\w-]+:)?meta\b[^>]*\bname\s*=\s*["\']honlib:club["\'][^>]*?/>')
+_METADATA_CLOSE = re.compile(rb"</((?:[\w-]+:)?)metadata\s*>")
+
+
+def write_club_id(path, club_id):
+    """Tag a book as a club book.
+
+    Done as a one-line text insertion rather than an XML round trip: re-
+    serialising the OPF renames its elements (meta becomes opf:meta), and the
+    EPUB reader then stops seeing calibre's series metadata.
+    """
+    if not _CLUB_ID.match(str(club_id or "")):
+        raise ValueError("invalid club id")
+
+    def transform(src):
+        opf_name = _opf_path(src)
+        data = _CLUB_META_TAG.sub(b"", src.read(opf_name))
+        closes = list(_METADATA_CLOSE.finditer(data))
+        if not closes:
+            raise ValueError("EPUB has no metadata section")
+        close = closes[0]
+        tag = f'<{close.group(1).decode()}meta name="{CLUB_META}" content="{club_id}"/>'.encode()
+        return {opf_name: data[:close.start()] + tag + data[close.start():]}
+    _rewrite_epub(path, transform)
+
+
+def _local(tag):
+    return tag.rsplit("}", 1)[-1]
+
+
+def _strip_href(base_dir, href):
+    href = (href or "").split("#", 1)[0]
+    return posixpath.normpath(posixpath.join(base_dir, href)) if href else ""
+
+
+def _nav_entries(zf, nav_name):
+    root = ET.fromstring(zf.read(nav_name))
+    base = posixpath.dirname(nav_name)
+    toc = None
+    for el in root.iter():
+        if _local(el.tag) == "nav" and "toc" in (el.get("{http://www.idpf.org/2007/ops}type") or el.get("epub:type") or "").split():
+            toc = el
+            break
+    if toc is None:
+        toc = next((el for el in root.iter() if _local(el.tag) == "nav"), None)
+    if toc is None:
+        return []
+    out = []
+    for a in toc.iter():
+        if _local(a.tag) == "a" and a.get("href"):
+            label = " ".join("".join(a.itertext()).split())
+            out.append((label, _strip_href(base, a.get("href"))))
+    return out
+
+
+def _ncx_entries(zf, ncx_name):
+    root = ET.fromstring(zf.read(ncx_name))
+    base = posixpath.dirname(ncx_name)
+    out = []
+    for point in root.iter():
+        if _local(point.tag) != "navPoint":
+            continue
+        label, src = "", ""
+        for child in point:
+            if _local(child.tag) == "navLabel":
+                label = " ".join("".join(child.itertext()).split())
+            elif _local(child.tag) == "content":
+                src = child.get("src") or ""
+        if src:
+            out.append((label, _strip_href(base, src)))
+    return out
+
+
+@lru_cache(maxsize=64)
+def _chapters_cached(path, size, mtime_ns):
+    with zipfile.ZipFile(path) as zf:
+        opf_name, root = _opf_root(zf)
+        base = posixpath.dirname(opf_name)
+        manifest = {}
+        nav_name = None
+        for item in root.iter():
+            if _local(item.tag) == "item" and item.get("id") and item.get("href"):
+                full = _strip_href(base, item.get("href"))
+                manifest[item.get("id")] = full
+                if "nav" in (item.get("properties") or "").split():
+                    nav_name = full
+        spine_el = next((el for el in root.iter() if _local(el.tag) == "spine"), None)
+        spine = []
+        if spine_el is not None:
+            for ref in spine_el:
+                href = manifest.get(ref.get("idref"))
+                if href:
+                    spine.append(href)
+        sizes = []
+        for href in spine:
+            try:
+                sizes.append(zf.getinfo(href).file_size)
+            except KeyError:
+                sizes.append(0)
+        entries = []
+        try:
+            if nav_name:
+                entries = _nav_entries(zf, nav_name)
+        except Exception:
+            entries = []
+        if not entries and spine_el is not None and spine_el.get("toc") in manifest:
+            try:
+                entries = _ncx_entries(zf, manifest[spine_el.get("toc")])
+            except Exception:
+                entries = []
+    index_of = {href: i for i, href in enumerate(spine)}
+    chapters, seen = [], set()
+    for label, href in entries:
+        spine_index = index_of.get(href)
+        # Several entries pointing into one file (a fragment each) can't be
+        # told apart by a spine position, so only the first one counts.
+        if spine_index is None or spine_index in seen:
+            continue
+        seen.add(spine_index)
+        chapters.append({"label": label or f"Chapter {len(chapters) + 1}", "spine": spine_index})
+    chapters.sort(key=lambda c: c["spine"])
+    if not chapters:
+        chapters = [{"label": f"Part {i + 1}", "spine": i} for i in range(len(spine))]
+    return {"chapters": chapters, "sizes": sizes}
+
+
+def book_chapters(path):
+    """The book's table of contents as an ordered list of {label, spine}."""
+    path = Path(path)
+    st = path.stat()
+    try:
+        return _chapters_cached(str(path), st.st_size, st.st_mtime_ns)
+    except Exception:
+        return {"chapters": [], "sizes": []}
+
+
+def position_chapter(path, cfi=None, percent=None):
+    """Index into book_chapters(path) of a reading position, or None.
+
+    The CFI's first spine step says exactly which file the reader is in. When
+    there is no CFI (a reader sync it couldn't map), the percentage is placed
+    along the spine by file size, which is roughly how readers compute it.
+    """
+    info = book_chapters(path)
+    chapters = info["chapters"]
+    if not chapters:
+        return None
+    spine_index = None
+    match = _SPINE_STEP.match(str(cfi or ""))
+    if match:
+        spine_index = int(match.group(1)) // 2 - 1
+    elif isinstance(percent, (int, float)) and info["sizes"] and sum(info["sizes"]):
+        target = max(0.0, min(1.0, float(percent))) * sum(info["sizes"])
+        running = 0
+        spine_index = len(info["sizes"]) - 1
+        for i, size in enumerate(info["sizes"]):
+            running += size
+            if running > target:
+                spine_index = i
+                break
+    if spine_index is None:
+        return None
+    found = 0
+    for i, chapter in enumerate(chapters):
+        if chapter["spine"] <= spine_index:
+            found = i
+    return found

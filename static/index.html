@@ -50,6 +50,11 @@
     <button id="app-update-dismiss" class="btn" type="button">Later</button>
   </div>
 
+  <div id="club-reminder" class="app-update club-reminder hidden" role="status">
+    <span id="club-reminder-message"></span>
+    <button id="club-reminder-dismiss" class="btn" type="button">Dismiss</button>
+  </div>
+
   <main>
     <section class="lib-section hidden" id="flat-section"><div id="flat-results" class="library"></div></section>
     <section class="lib-section hidden" id="inprogress-section"><div class="lib-head"><h2>In Progress</h2></div><div id="inprogress" class="library"></div></section>
@@ -122,6 +127,7 @@
       <div class="modal-body book-actions-body">
         <button type="button" id="book-action-reset" class="btn">Reset progress</button>
         <button type="button" id="book-action-delete" class="btn primary">Delete book</button>
+        <div id="book-club-panel" class="book-club-panel hidden"></div>
       </div>
     </div>
   </div>
