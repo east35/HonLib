@@ -57,7 +57,7 @@ class ChapterTests(unittest.TestCase):
         self.assertIsNone(library.read_club_id(self.path))
 
 
-class TwoMemberTests(unittest.TestCase):
+class ClubTestCase(unittest.TestCase):
     """Two instances, simulated in one process by switching who 'we' are."""
 
     def setUp(self):
@@ -117,6 +117,9 @@ class TwoMemberTests(unittest.TestCase):
         self.assertEqual(len(books), 1)
         return books[0]
 
+
+
+class TwoMemberTests(ClubTestCase):
     def test_book_club_import_gives_both_libraries_the_identical_file(self):
         self.stage("jim")
         with self.as_member("jim"):
@@ -198,6 +201,71 @@ class TwoMemberTests(unittest.TestCase):
         # All three chapters of book one, then chapter Two (index 1) of book two.
         self.assertEqual(saga["members"]["jim"]["position"], 4)
         self.assertIsNone(saga["members"]["morgan"]["position"])
+
+
+class ExistingBookTests(ClubTestCase):
+    """Adding a book that is already on the shelf to the club."""
+
+    def shelve(self, member, relpath, **kwargs):
+        path = self.dirs[member]["books"] / relpath
+        make_epub(path, **kwargs)
+        return path
+
+    def test_a_shelved_book_is_tagged_in_place_and_shared(self):
+        mine_path = self.shelve("jim", "Saga/01 - Saga One.epub", title="Saga One", series="Saga", series_index="1")
+        with self.as_member("jim"):
+            mine = self.library_book("jim")
+            self.client.post("/api/progress", json={"book_id": mine["id"], "cfi": CFI_TWO, "percent": 0.4})
+            res = self.client.post(f"/api/book/{mine['id']}/club", json={})
+            self.assertEqual(res.status_code, 200, res.get_json())
+            self.assertEqual(res.get_json()["shared_with"], ["Morgan"])
+            tagged = self.library_book("jim")
+        # Same file, same id, same saved place: only the OPF gained a tag.
+        self.assertEqual(tagged["id"], mine["id"])
+        self.assertTrue(tagged["club_id"])
+        self.assertEqual(progress_entry(self.dirs["jim"]["progress"], mine["id"])["cfi"], CFI_TWO)
+        with self.as_member("morgan"):
+            self.client.get("/api/library")
+            hers = self.library_book("morgan")
+        self.assertEqual(hers["club_id"], tagged["club_id"])
+        self.assertEqual(
+            library.resolve_book_path(self.dirs["morgan"]["books"], hers["path"]).read_bytes(),
+            mine_path.read_bytes(),
+        )
+
+    def test_sharing_a_book_the_partner_already_owns_is_flagged(self):
+        self.shelve("jim", "Saga/01 - Saga One.epub", title="Saga One", series="Saga", series_index="1")
+        self.shelve("morgan", "Elsewhere/Saga One.epub", title="Saga One", series="Saga", series_index="1")
+        with self.as_member("morgan"):
+            self.client.get("/api/library")      # Morgan's app lists what she owns
+        with self.as_member("jim"):
+            mine = self.library_book("jim")
+            res = self.client.post(f"/api/book/{mine['id']}/club", json={})
+            self.assertEqual(res.status_code, 409)
+            self.assertIn("Morgan already has a copy", res.get_json()["error"])
+            self.assertIsNone(self.library_book("jim")["club_id"], "a flagged book must stay untagged")
+        self.assertFalse((self.club_dir / "inbox").exists())
+
+    def test_staging_import_flags_a_book_the_partner_already_owns(self):
+        self.shelve("morgan", "Saga/Saga One.epub", title="Saga One", series="Saga", series_index="1")
+        with self.as_member("morgan"):
+            self.client.get("/api/library")
+        staged = self.stage("jim")
+        with self.as_member("jim"):
+            res = self.import_staged("download.epub", book_club=True)
+        self.assertEqual(res.status_code, 409)
+        self.assertTrue(staged.exists(), "a flagged import stays in staging")
+
+    def test_adding_needs_json(self):
+        self.shelve("jim", "Saga/One.epub")
+        with self.as_member("jim"):
+            res = self.client.post(f"/api/book/{self.library_book('jim')['id']}/club", data="")
+        self.assertEqual(res.status_code, 415)
+
+
+def progress_entry(path, book_id):
+    import json
+    return json.loads(Path(path).read_text())["books"][book_id]
 
 
 class DisabledTests(unittest.TestCase):

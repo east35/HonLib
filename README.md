@@ -306,7 +306,10 @@ trusted local network.
 Two HonLib instances on the same server can read books together. Tick
 **Book club** when importing from staging: once your title, series and cover
 edits are applied, the book is tagged and the identical file is also added to
-the other person's library. Club books get a **Club** badge, and their book
+the other person's library. A book already on your shelf can join the same way
+from its book menu (**Add to book club**). If the other person already owns
+their own copy, sharing is flagged and stopped rather than leaving them with
+two. Club books get a **Club** badge, and their book
 menu shows where each of you is, by chapter. When one of you gets two or more
 chapters ahead, a banner at the top of the library nudges you both back
 together. A partner who is ahead is shown by distance, never by chapter title,

@@ -323,3 +323,4 @@ body.journal-open{overflow:hidden}
 .club-nudge{font-size:13px;font-weight:700;border-left:4px solid var(--fg);padding:2px 0 2px 10px}
 .staging-club{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:14px;font-weight:800}
 .staging-club input{width:20px;height:20px;accent-color:var(--fg)}
+#book-action-club{white-space:normal}

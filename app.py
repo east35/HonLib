@@ -1006,6 +1006,9 @@ def import_staged_book(staging_id):
         if data.get("cover_url"):
             library.replace_book_cover(src, _download_cover(data.get("cover_url")))
         if book_club:
+            conflict = _club_conflict(src)
+            if conflict:
+                return conflict
             # Last edit to the file: from here on both copies stay identical.
             library.write_club_id(src, library.read_club_id(src) or club.new_club_id())
         dest = _library_destination_for(src)
@@ -1013,8 +1016,7 @@ def import_staged_book(staging_id):
         shutil.move(str(src), str(dest))
         shared_with = club.share_book(dest) if book_club else []
         books = library.refresh_library(current_library_folder())
-        if book_club:
-            _club_publish(books)
+        _club_publish(books)  # also keeps the partner's duplicate check current
         return jsonify({
             "ok": True,
             "path": dest.relative_to(Path(current_library_folder()).resolve()).as_posix(),
@@ -1028,7 +1030,8 @@ def import_staged_book(staging_id):
 
 @app.route("/api/library")
 def list_library():
-    _club_collect()
+    if not _club_collect():
+        _club_publish()
     books = library.scan_library(current_library_folder(), use_cache=True)
     prog = progress.load_progress().get("books", {})
     for book in books:
@@ -1042,6 +1045,7 @@ def list_library():
 def refresh_library():
     _club_collect()
     books = library.refresh_library(current_library_folder())
+    _club_publish(books)
     prog = progress.load_progress().get("books", {})
     for book in books:
         p = prog.get(book["id"], {})
@@ -1072,8 +1076,7 @@ def delete_book(book_id):
 
     progress.delete_book_data(book_id)
     books = library.refresh_library(current_library_folder())
-    if book.get("club_id"):
-        _club_publish(books)
+    _club_publish(books)
     prog = progress.load_progress().get("books", {})
     for remaining in books:
         saved = prog.get(remaining["id"], {})
@@ -1141,6 +1144,22 @@ def _club_collect():
     return bool(moved)
 
 
+def _club_conflict(path):
+    """An error response if a partner already owns their own copy, else None.
+
+    Sharing would give them a second copy beside theirs, so it is flagged
+    instead and left for a person to sort out.
+    """
+    meta = library.read_book_metadata(path)
+    owners = club.partners_owning(library.book_key_for(meta))
+    if not owners:
+        return None
+    names = " & ".join(club.display_name(m) for m in owners)
+    return jsonify({"ok": False, "conflict": True, "error":
+                    f"{names} already has a copy of \u201c{meta.get('title')}\u201d. "
+                    f"Remove that copy first, then add this one to the book club."}), 409
+
+
 def _is_club_book(book_id):
     try:
         return bool(library.find_book_by_id(current_library_folder(), book_id).get("club_id"))
@@ -1162,11 +1181,42 @@ def club_state():
     return jsonify(data)
 
 
+@app.route("/api/book/<book_id>/club", methods=["POST"])
+def add_book_to_club(book_id):
+    """Make a book already in the library a club book, and share it."""
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "JSON request required"}), 415
+    if not club.enabled():
+        return jsonify({"ok": False, "error": "Book club isn't set up on this server"}), 400
+    if not club.partners():
+        return jsonify({"ok": False, "error": "Nobody else has joined the book club yet"}), 400
+    try:
+        path, book = _book_path_by_id(book_id)
+    except (FileNotFoundError, ValueError):
+        return jsonify({"ok": False, "error": "Book not found"}), 404
+    try:
+        if not book.get("club_id"):
+            conflict = _club_conflict(path)
+            if conflict:
+                return conflict
+            # Only the OPF changes: the spine, and so every saved position and
+            # passage in this book, stays valid.
+            library.write_club_id(path, club.new_club_id())
+        shared_with = club.share_book(path)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    books = library.refresh_library(current_library_folder())
+    _club_publish(books)
+    return jsonify({"ok": True, "shared_with": [club.display_name(m) for m in shared_with]})
+
+
 def _club_loop():
     # Books a partner shares, and positions synced from the reader, should
     # turn up without anyone opening the app first.
     last_seen = None
+    ticks = 0
     while True:
+        ticks += 1
         try:
             # Only republish when progress.json moved; a rescan otherwise
             # re-reads every EPUB in the library for nothing.
@@ -1174,7 +1224,9 @@ def _club_loop():
                 seen = progress.PROGRESS_PATH.stat().st_mtime_ns
             except OSError:
                 seen = 0
-            if _club_collect() or seen != last_seen:
+            # Every ten minutes regardless, so the list of owned books a
+            # partner checks for duplicates follows changes made on disk.
+            if _club_collect() or seen != last_seen or ticks % 10 == 0:
                 _club_publish()
                 last_seen = seen
         except Exception as e:

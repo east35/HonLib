@@ -678,6 +678,7 @@ function openBookActions(book, mode = "maintenance") {
   els.bookActionReset.disabled = false;
   els.bookActionDelete.disabled = false;
   renderClubPanel(book);
+  renderClubAction(book);
   openModal(els.bookActionsModal, els.bookActionReset);
 }
 function closeBookActions() {
@@ -819,6 +820,30 @@ function renderClubPanel(book) {
   const nudge = clubNudge(club);
   panel.innerHTML = `<div class="club-head">Book club<span>${escapeHtml(club.name)}</span></div>${rows}` +
     (nudge ? `<div class="club-nudge">${escapeHtml(nudge.text)}</div>` : "");
+}
+
+// "Add to book club" for a book already on the shelf (staging has its own
+// checkbox). Hidden once the book is in the club, or with nobody to share with.
+function renderClubAction(book) {
+  const button = $("#book-action-club");
+  if (!button) return;
+  const partners = clubPartners();
+  button.classList.toggle("hidden", !partners.length || !!clubBookOf(book));
+  button.disabled = false;
+  button.textContent = `Add to book club (also adds to ${partners.map((m) => m.name).join(" & ")}'s library)`;
+  button.onclick = async () => {
+    button.disabled = true;
+    button.textContent = "Adding…";
+    try {
+      await api(`/api/book/${encodeURIComponent(book.id)}/club`, { method: "POST", body: "{}" });
+      await loadClub();
+      renderSections();
+      if (bookActionsBook) { renderClubPanel(bookActionsBook); renderClubAction(bookActionsBook); }
+    } catch (e) {
+      alert("Couldn't add to book club: " + e.message);
+      renderClubAction(book);
+    }
+  };
 }
 
 function clubReminder() {
