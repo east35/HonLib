@@ -36,7 +36,7 @@ try {
   const modal = page.locator("#book-actions-modal");
   assert.equal(await modal.isVisible(), true, "ellipsis did not open book options");
   assert.deepEqual(
-    await modal.locator(".book-actions-body button").allTextContents(),
+    await modal.locator(".book-actions-body button:not(.hidden)").allTextContents(),
     ["Reset progress", "Delete book"],
     "book options changed",
   );
@@ -54,7 +54,7 @@ try {
   assert.equal(await libraryRow.locator("[data-book-actions]").count(), 1, "table overflow button was removed");
   await libraryRow.locator("[data-book-actions]").click();
   assert.deepEqual(
-    await modal.locator(".book-actions-body button").allTextContents(),
+    await modal.locator(".book-actions-body button:not(.hidden)").allTextContents(),
     ["Reset progress", "Delete book"],
     "table book options changed",
   );
@@ -71,7 +71,7 @@ try {
   );
   await libraryCard.click();
   assert.deepEqual(
-    await modal.locator(".book-actions-body button").allTextContents(),
+    await modal.locator(".book-actions-body button:not(.hidden)").allTextContents(),
     ["Read", "Remove"],
     "unread cover choices changed",
   );

@@ -679,7 +679,9 @@ function openBookActions(book, mode = "maintenance") {
   els.bookActionDelete.disabled = false;
   renderClubPanel(book);
   renderClubAction(book);
-  openModal(els.bookActionsModal, els.bookActionReset);
+  // Focus the title, not a button: a focused first button gets the browser's
+  // focus ring and looks unlike the buttons below it.
+  openModal(els.bookActionsModal, els.bookActionsTitle);
 }
 function closeBookActions() {
   closeModal(els.bookActionsModal);
@@ -828,9 +830,10 @@ function renderClubAction(book) {
   const button = $("#book-action-club");
   if (!button) return;
   const partners = clubPartners();
-  button.classList.toggle("hidden", !partners.length || !!clubBookOf(book));
+  const show = partners.length > 0 && !clubBookOf(book);
+  button.classList.toggle("hidden", !show);
   button.disabled = false;
-  button.textContent = `Add to book club (also adds to ${partners.map((m) => m.name).join(" & ")}'s library)`;
+  button.textContent = show ? "Add to Book Club" : "";
   button.onclick = async () => {
     button.disabled = true;
     button.textContent = "Adding…";
