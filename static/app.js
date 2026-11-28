@@ -380,6 +380,7 @@ async function refreshOpenReaderProgress() {
 
 async function loadLibrary() {
   await loadProgress();
+  await loadClub();
   try {
     const res = await api("/api/library");
     setLibraryData(res);
@@ -512,7 +513,7 @@ function renderTableRow(b, kind) {
   if (kind === "inprogress") status = fmtPercent(b.percent);
   else if (kind === "complete") status = "Finished";
   tr.innerHTML = `<td class="c-cover">${cover}</td>` +
-    `<td class="c-title"><span class="row-title">${escapeHtml(b.title)}</span></td>` +
+    `<td class="c-title"><span class="row-title">${escapeHtml(b.title)}</span>${clubBookOf(b) ? '<span class="row-club-badge">Club</span>' : ""}</td>` +
     `<td class="c-author">${escapeHtml(b.author || "")}</td>` +
     `<td class="c-status"><span class="row-status">${escapeHtml(status)}</span>${bookActionsButton(b, "row-menu")}</td>`;
   tr.addEventListener("click", () => openReader(b));
@@ -621,7 +622,7 @@ function renderCard(b, kind) {
   let strip = "";
   if (kind === "inprogress") strip = resumeStrip(fmtPercent(b.percent), b.last_opened, b);
   else if (kind === "complete") strip = resumeStrip("Finished", b.last_opened, b);
-  card.innerHTML = `${cover}${strip}`;
+  card.innerHTML = `${clubBookOf(b) ? '<span class="club-badge">Club</span>' : ""}${cover}${strip}`;
   card.title = b.title;
   card.addEventListener("click", () => kind === "library" ? openBookActions(b, "unread") : openReader(b));
   card.querySelector("[data-book-actions]")?.addEventListener("click", (e) => {
@@ -676,6 +677,7 @@ function openBookActions(book, mode = "maintenance") {
   els.bookActionDelete.textContent = mode === "unread" ? "Remove" : "Delete book";
   els.bookActionReset.disabled = false;
   els.bookActionDelete.disabled = false;
+  renderClubPanel(book);
   openModal(els.bookActionsModal, els.bookActionReset);
 }
 function closeBookActions() {
@@ -707,6 +709,141 @@ els.bookActionDelete.addEventListener("click", async () => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !els.bookActionsModal.classList.contains("hidden")) closeBookActions();
 });
+
+// ---- Book club -------------------------------------------------------------
+// Club books are badged on their ordinary cards, and their book menu shows where
+// each reader is. When two readers drift apart, a banner (where the update
+// notice sits) nudges them back together. The server works out positions as
+// chapters from the start of the series (club.py), so they compare across books.
+let clubState = { enabled: false };
+const CLUB_DISMISSED_KEY = "ebook-library.club-dismissed";
+const CLUB_NUDGE_CHAPTERS = 2;   // how far apart before anyone is nudged
+
+async function loadClub() {
+  try { clubState = await api("/api/club"); } catch { clubState = { enabled: false }; }
+  renderClubReminder();
+}
+function clubPartners() {
+  return clubState.enabled ? (clubState.members || []).filter((m) => m.id !== clubState.me) : [];
+}
+// The club a local book belongs to, and its club id, or null.
+function clubBookOf(book) {
+  if (!clubState.enabled) return null;
+  for (const [clubId, bookId] of Object.entries(clubState.local || {})) {
+    if (bookId !== book.id) continue;
+    const club = (clubState.clubs || []).find((c) => c.books.some((b) => b.club_id === clubId));
+    return club ? { club, clubId } : null;
+  }
+  return null;
+}
+function clubBookTitle(club, clubId) {
+  const b = club.books.find((x) => x.club_id === clubId);
+  return b ? b.title : "";
+}
+function chapterCount(n) { return `${n} chapter${n === 1 ? "" : "s"}`; }
+// Publishers often set chapter titles in capitals ("CHAPTER ONE - RESURRECTION
+// AND DEATH"). Shown as they are, they shout and wrap; title case reads better.
+const SMALL_WORDS = new Set(["a", "an", "and", "as", "at", "but", "by", "for", "in", "of", "on", "or", "the", "to", "with"]);
+function niceChapter(label) {
+  let text = String(label || "").replace(/\s+/g, " ").trim();
+  if (text && text === text.toUpperCase() && /[A-Z]/.test(text)) {
+    text = text.toLowerCase().replace(/[a-z][a-z']*/g, (w, i) => (i > 0 && SMALL_WORDS.has(w) ? w : w[0].toUpperCase() + w.slice(1)));
+  }
+  // "Chapter One - Severian" → "Chapter One: Severian"
+  return text.replace(/^((?:chapter|part|book)\s+[\w-]+)\s+[-–—:]\s+/i, "$1: ");
+}
+// How many chapters `member` is ahead of me (negative: behind), or null when
+// either of us hasn't started.
+function clubGap(club, member) {
+  const mine = club.members[clubState.me]?.position;
+  const theirs = club.members[member]?.position;
+  if (mine == null && theirs == null) return null;
+  return (theirs ?? -1) - (mine ?? -1);
+}
+// Where a member is, as seen from one book of the club. A partner who is ahead
+// is shown by distance, never by chapter title: titles can give the plot away.
+function memberPlace(club, member, clubId) {
+  const m = club.members[member];
+  const entry = m?.books[clubId];
+  if (!entry) return { text: "No copy yet", percent: 0 };
+  const percent = entry.percent || 0;
+  const order = (id) => club.books.findIndex((b) => b.club_id === id);
+  if (percent >= 0.995) return { text: "Finished", percent: 1 };
+  if (m.current && order(m.current) > order(clubId)) return { text: `On to ${clubBookTitle(club, m.current)}`, percent: 1 };
+  if (!percent) return { text: "Not started", percent: 0 };
+  const gap = member === clubState.me ? 0 : clubGap(club, member);
+  if (gap > 0) return { text: `${chapterCount(gap)} ahead of you`, percent };
+  return { text: niceChapter(entry.chapter_label) || "Started", percent };
+}
+
+// The nudge for one club, or null when everyone is close enough together.
+function clubNudge(club) {
+  let worst = null;
+  for (const p of clubPartners()) {
+    const gap = clubGap(club, p.id);
+    if (gap == null || Math.abs(gap) < CLUB_NUDGE_CHAPTERS) continue;
+    if (!worst || Math.abs(gap) > Math.abs(worst.gap)) worst = { partner: p, gap };
+  }
+  if (!worst) return null;
+  const { partner, gap } = worst;
+  const theyStarted = club.members[partner.id]?.position != null;
+  const iStarted = club.members[clubState.me]?.position != null;
+  let text;
+  if (gap < 0) {
+    text = theyStarted
+      ? `You're ${chapterCount(-gap)} ahead of ${partner.name} in ${club.name}. Maybe read something else for a bit so ${partner.name} can catch up.`
+      : `You're ${chapterCount(-gap)} into ${club.name} and ${partner.name} hasn't started yet. Maybe wait for ${partner.name} to catch up.`;
+  } else {
+    text = iStarted
+      ? `${partner.name} is ${chapterCount(gap)} ahead of you in ${club.name}. Time to catch up!`
+      : `${partner.name} is ${chapterCount(gap)} into ${club.name}. Time to start!`;
+  }
+  // Dismissing hides this nudge until the gap changes.
+  return { text, key: `${club.key}:${partner.id}:${gap}`, size: Math.abs(gap) };
+}
+
+function renderClubPanel(book) {
+  const panel = $("#book-club-panel");
+  if (!panel) return;
+  const found = clubBookOf(book);
+  panel.classList.toggle("hidden", !found);
+  if (!found) { panel.innerHTML = ""; return; }
+  const { club, clubId } = found;
+  const everyone = [...(clubState.members || [])].sort((a, b) => (b.id === clubState.me) - (a.id === clubState.me));
+  const rows = everyone.map((m) => {
+    const place = memberPlace(club, m.id, clubId);
+    return `<div class="club-member"><div class="club-member-line"><span class="club-who">${escapeHtml(m.id === clubState.me ? "You" : m.name)}</span>` +
+      `<span class="club-where">${escapeHtml(place.text)}</span></div>` +
+      `<div class="club-bar"><div style="width:${Math.round(place.percent * 100)}%"></div></div></div>`;
+  }).join("");
+  const nudge = clubNudge(club);
+  panel.innerHTML = `<div class="club-head">Book club<span>${escapeHtml(club.name)}</span></div>${rows}` +
+    (nudge ? `<div class="club-nudge">${escapeHtml(nudge.text)}</div>` : "");
+}
+
+function clubReminder() {
+  if (!clubState.enabled) return null;
+  let best = null;
+  for (const club of clubState.clubs || []) {
+    const nudge = clubNudge(club);
+    if (nudge && (!best || nudge.size > best.size)) best = nudge;
+  }
+  return best;
+}
+function renderClubReminder() {
+  const banner = $("#club-reminder");
+  if (!banner) return;
+  const reminder = clubReminder();
+  let dismissed = "";
+  try { dismissed = localStorage.getItem(CLUB_DISMISSED_KEY) || ""; } catch {}
+  if (!reminder || dismissed.split(",").includes(reminder.key)) { banner.classList.add("hidden"); return; }
+  $("#club-reminder-message").textContent = reminder.text;
+  banner.classList.remove("hidden");
+  $("#club-reminder-dismiss").onclick = () => {
+    try { localStorage.setItem(CLUB_DISMISSED_KEY, [reminder.key, ...dismissed.split(",").filter(Boolean)].slice(0, 50).join(",")); } catch {}
+    renderClubReminder();
+  };
+}
 
 function appendLog(el, line) { el.textContent += (el.textContent ? "\n" : "") + line; el.scrollTop = el.scrollHeight; }
 function finishJob() { if (pollTimer) clearTimeout(pollTimer); pollTimer = null; currentJob = null; }
@@ -771,6 +908,7 @@ function renderStaging(items) {
         <button type="button" class="btn ghost" data-cover-search="${escapeHtml(item.id)}">Find covers</button>
         <div class="cover-candidates" data-cover-candidates></div>
       </div>
+      ${clubPartners().length ? `<label class="staging-club"><input type="checkbox" data-book-club> Book club: also add to ${escapeHtml(clubPartners().map((m) => m.name).join(" & "))}'s library</label>` : ""}
       <div class="row"><button class="btn primary" data-stage-import="${escapeHtml(item.id)}">Import</button></div>
     </div>
     <datalist id="staging-series-options">${knownSeriesNames().map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}</datalist>
@@ -800,10 +938,12 @@ function renderStaging(items) {
       item.querySelectorAll("[data-meta]").forEach((input) => { payload[input.dataset.meta] = input.value.trim(); });
       const selected = item.querySelector("[data-cover-url].selected");
       if (selected) payload.cover_url = selected.dataset.coverUrl;
+      if (item.querySelector("[data-book-club]")?.checked) payload.book_club = true;
       button.disabled = true;
       try {
         const res = await api(`/api/staging/${encodeURIComponent(button.dataset.stageImport)}/import`, { method: "POST", body: JSON.stringify(payload) });
         setLibraryData(res);
+        if (payload.book_club) await loadClub();
         renderSections();
         await loadStaging();
       } catch (e) {
@@ -3022,6 +3162,9 @@ els.refreshLibrary.addEventListener("click", async () => {
   els.refreshLibrary.disabled = true;
   try {
     await loadProgress();
+    // Club first: it shelves books the other reader shared, and its state is
+    // what badges them.
+    await loadClub();
     const res = await api("/api/library/refresh", { method: "POST" });
     setLibraryData(res);
     renderSections();

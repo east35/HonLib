@@ -307,3 +307,19 @@ body.journal-open{overflow:hidden}
   .journal-cards .lib-empty{grid-column:1/-1;grid-row-end:span 12}
 }
 @media(max-width:640px){.journal-head{padding:10px 12px;gap:10px}.journal-title{flex:1 1 auto;font-size:20px}.journal-count{flex:0 0 auto;font-size:14px;padding-left:10px}.journal-tools{padding:10px 12px}.journal-cards{padding:20px 12px 40px;gap:22px}.passage-panel{padding:14px}.passage-where{font-size:16px}.passage-quote{font-size:16px}.ps-bar button{padding:8px 6px;font-size:13px}}
+
+/* Book club: a badge on the normal cards, details in the book menu. */
+.club-badge{position:absolute;top:8px;left:8px;z-index:1;background:var(--fg);color:var(--bg);border:2px solid var(--bg);padding:2px 8px;font-size:12px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;pointer-events:none}
+.row-club-badge{display:inline-block;margin-left:8px;border:2px solid currentColor;padding:0 6px;font-size:11px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;vertical-align:middle}
+.book-club-panel{display:grid;gap:12px;border-top:2px solid var(--fg);padding-top:16px;margin-top:4px}
+.club-head{display:flex;justify-content:space-between;gap:12px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}
+.club-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;font-size:13px;opacity:.8}
+.club-member{display:grid;gap:6px}
+.club-member-line{display:flex;align-items:baseline;gap:12px;font-size:14px}
+.club-who{flex:0 0 auto;font-weight:800}
+.club-where{flex:1 1 auto;min-width:0;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.club-bar{height:6px;border:2px solid var(--fg);box-sizing:content-box}
+.club-bar div{height:100%;background:var(--fg)}
+.club-nudge{font-size:13px;font-weight:700;border-left:4px solid var(--fg);padding:2px 0 2px 10px}
+.staging-club{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:14px;font-weight:800}
+.staging-club input{width:20px;height:20px;accent-color:var(--fg)}

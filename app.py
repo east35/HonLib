@@ -16,6 +16,7 @@ from urllib.parse import quote, urlsplit
 import requests
 from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file, send_from_directory, session
 
+import club
 import journal
 import library
 import progress
@@ -233,6 +234,8 @@ def crosspoint_sync_upload():
     # resumes by percentage when this EPUB's XPath cannot be resolved exactly.
     cfi = crosspoint_sync.xpath_to_cfi(path, xpath) or ""
     progress.update_book_progress(book["id"], cfi=cfi, percent=percentage)
+    if book.get("club_id"):
+        _club_publish()
     return jsonify({"document": document_id, "timestamp": int(time.time())})
 
 
@@ -791,6 +794,8 @@ def post_progress():
     )
     if result.get("stale"):
         return jsonify({"ok": False, "stale": True, "book_id": book_id, "entry": result["entry"]}), 409
+    if _is_club_book(book_id):
+        _club_publish()
     return jsonify({"ok": True, "book_id": book_id, "entry": result["entry"]})
 
 
@@ -984,6 +989,11 @@ def import_staged_book(staging_id):
             src = _staging_path_by_filename(data.get("filename"))
         except FileNotFoundError:
             return jsonify({"ok": False, "error": "Staged book not found"}), 404
+    book_club = bool(data.get("book_club"))
+    if book_club and not club.enabled():
+        return jsonify({"ok": False, "error": "Book club isn't set up on this server"}), 400
+    if book_club and not club.partners():
+        return jsonify({"ok": False, "error": "Nobody else has joined the book club yet"}), 400
     try:
         if any(k in data for k in ("title", "author", "series", "series_index")):
             library.write_book_metadata(
@@ -995,15 +1005,22 @@ def import_staged_book(staging_id):
             )
         if data.get("cover_url"):
             library.replace_book_cover(src, _download_cover(data.get("cover_url")))
+        if book_club:
+            # Last edit to the file: from here on both copies stay identical.
+            library.write_club_id(src, library.read_club_id(src) or club.new_club_id())
         dest = _library_destination_for(src)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dest))
+        shared_with = club.share_book(dest) if book_club else []
         books = library.refresh_library(current_library_folder())
+        if book_club:
+            _club_publish(books)
         return jsonify({
             "ok": True,
             "path": dest.relative_to(Path(current_library_folder()).resolve()).as_posix(),
             "books": books,
             "groups": library.group_books(books),
+            "shared_with": [club.display_name(m) for m in shared_with],
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -1011,6 +1028,7 @@ def import_staged_book(staging_id):
 
 @app.route("/api/library")
 def list_library():
+    _club_collect()
     books = library.scan_library(current_library_folder(), use_cache=True)
     prog = progress.load_progress().get("books", {})
     for book in books:
@@ -1022,6 +1040,7 @@ def list_library():
 
 @app.route("/api/library/refresh", methods=["POST"])
 def refresh_library():
+    _club_collect()
     books = library.refresh_library(current_library_folder())
     prog = progress.load_progress().get("books", {})
     for book in books:
@@ -1053,6 +1072,8 @@ def delete_book(book_id):
 
     progress.delete_book_data(book_id)
     books = library.refresh_library(current_library_folder())
+    if book.get("club_id"):
+        _club_publish(books)
     prog = progress.load_progress().get("books", {})
     for remaining in books:
         saved = prog.get(remaining["id"], {})
@@ -1089,6 +1110,78 @@ def book_cover(book_id):
     return resp
 
 
+# ---- Book club -------------------------------------------------------------
+
+def _club_publish(books=None):
+    """Share this member's place in their club books (see club.py)."""
+    if not club.enabled():
+        return
+    root = current_library_folder()
+    try:
+        if books is None:
+            books = library.scan_library(root, use_cache=True)
+        club.publish_progress(books, progress.load_progress().get("books", {}),
+                              lambda book: library.resolve_book_path(root, book["path"]))
+    except Exception as e:
+        app.logger.warning("book club: could not publish progress: %s", e)
+
+
+def _club_collect():
+    """Shelve club books a partner has sent. Returns True when any arrived."""
+    if not club.enabled() or not club.inbox_waiting():
+        return False
+    root = current_library_folder()
+    try:
+        moved = club.collect_inbox(library.scan_library(root, use_cache=True), _library_destination_for)
+    except Exception as e:
+        app.logger.warning("book club: could not collect inbox: %s", e)
+        return False
+    if moved:
+        _club_publish(library.refresh_library(root))
+    return bool(moved)
+
+
+def _is_club_book(book_id):
+    try:
+        return bool(library.find_book_by_id(current_library_folder(), book_id).get("club_id"))
+    except FileNotFoundError:
+        return False
+
+
+@app.route("/api/club")
+def club_state():
+    if not club.enabled():
+        return jsonify({"enabled": False})
+    # Collect first: the app asks for this before the library, and a book
+    # that has just arrived should already be badged.
+    if not _club_collect():
+        _club_publish()
+    data = club.state()
+    # Which local book is which club book, so the app can badge its cards.
+    data["local"] = {b["club_id"]: b["id"] for b in library.scan_library(current_library_folder(), use_cache=True) if b.get("club_id")}
+    return jsonify(data)
+
+
+def _club_loop():
+    # Books a partner shares, and positions synced from the reader, should
+    # turn up without anyone opening the app first.
+    last_seen = None
+    while True:
+        try:
+            # Only republish when progress.json moved; a rescan otherwise
+            # re-reads every EPUB in the library for nothing.
+            try:
+                seen = progress.PROGRESS_PATH.stat().st_mtime_ns
+            except OSError:
+                seen = 0
+            if _club_collect() or seen != last_seen:
+                _club_publish()
+                last_seen = seen
+        except Exception as e:
+            app.logger.warning("book club: %s", e)
+        time.sleep(60)
+
+
 _runtime_lock = threading.Lock()
 _runtime_started = False
 
@@ -1110,6 +1203,8 @@ def initialize_runtime():
     if HAS_IRC:
         irc.client.start_background()
     threading.Thread(target=_warm_library, daemon=True).start()
+    if club.enabled():
+        threading.Thread(target=_club_loop, daemon=True).start()
 
 
 if __name__ == "__main__":

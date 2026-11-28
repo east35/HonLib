@@ -256,6 +256,8 @@ common ones:
 | `EBOOK_LIB_COOKIE_SECURE` | _(empty)_        | Set to `1` only when served entirely over HTTPS  |
 | `EBOOK_LIB_CROSSPOINT_SYNC_USERNAME` | _(empty)_ | XTEINK sync username; enable with a separate sync password |
 | `EBOOK_LIB_CROSSPOINT_SYNC_PASSWORD` | _(empty)_ | XTEINK sync password; never reuse your HonLib login password |
+| `EBOOK_LIB_CLUB_DIR`      | _(empty)_        | Shared book club folder (container path); see below |
+| `EBOOK_LIB_MEMBER`        | _(empty)_        | This instance's book club name, e.g. `jim`       |
 
 The host port is set in `docker-compose.yml` (`8781:8765`) — change the left
 number if `8781` is taken.
@@ -298,6 +300,33 @@ its saved text position in both directions when it can. If an EPUB's position
 cannot be translated, the reader uses the overall book percentage and the
 landing spot may be approximate. The sync URL should use HTTPS outside a
 trusted local network.
+
+### Book club
+
+Two HonLib instances on the same server can read books together. Tick
+**Book club** when importing from staging: once your title, series and cover
+edits are applied, the book is tagged and the identical file is also added to
+the other person's library. Club books get a **Club** badge, and their book
+menu shows where each of you is, by chapter. When one of you gets two or more
+chapters ahead, a banner at the top of the library nudges you both back
+together. A partner who is ahead is shown by distance, never by chapter title,
+so nothing is spoiled.
+
+To enable it, mount one server-side folder into both containers and give each a
+member name:
+
+```yaml
+volumes:
+  - /srv/honlib-club:/data/club
+environment:
+  EBOOK_LIB_CLUB_DIR: /data/club
+  EBOOK_LIB_MEMBER: jim        # the other instance uses its own name
+```
+
+That folder holds only small JSON files and books in transit to the other library. Keep
+it outside every library folder, so nothing in it is synced to a reader. A
+series of club books is one club; a club book with no series is a club on its
+own.
 
 ## Optional modules
 
