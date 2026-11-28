@@ -4,7 +4,8 @@ Each instance runs in its own container with its own library. They meet in one
 shared folder (EBOOK_LIB_CLUB_DIR), which lives on the server only and is never
 synced to a reader:
 
-    progress/<member>.json   one member's position in their club books
+    progress/<member>.json   one member's position in their club books, and
+                             which other books they own (to flag duplicates)
     inbox/<member>/*.epub    a club book on its way into that member's library
 
 Every file has a single writer (its member, or the member sending a book), and
@@ -178,9 +179,22 @@ def publish_progress(books, saved_progress, resolve_path):
         except (OSError, ValueError):
             continue
         entries[book["club_id"]] = _entry_for(book, path, saved_progress.get(book["id"]) or {})
-    data = {"member": MEMBER, "updated": _now(), "books": entries}
+    # Identity keys of the rest of the library, so a partner can tell before
+    # sharing a book that this member already owns a copy of their own.
+    own = sorted({b["key"] for b in books if not b.get("club_id") and b.get("key")})
+    data = {"member": MEMBER, "updated": _now(), "books": entries, "library_keys": own}
     _write_json(CLUB_DIR / "progress" / f"{MEMBER}.json", data)
     return data
+
+
+def partners_owning(key):
+    """Partners whose library already holds their own copy of this book."""
+    owners = []
+    for member in partners():
+        data = _read_json(CLUB_DIR / "progress" / f"{member}.json") or {}
+        if key in (data.get("library_keys") or []):
+            owners.append(member)
+    return owners
 
 
 def _member_progress(member):
